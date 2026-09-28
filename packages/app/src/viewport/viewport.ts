@@ -178,6 +178,10 @@ export class Viewport {
         this.callbacks.onCamera?.();
       },
       pick: (clientX, clientY) => this.hitModel(clientX, clientY)?.point,
+      center: () =>
+        this.lastBounds
+          ? new Vector3().addVectors(this.lastBounds.min, this.lastBounds.max).multiplyScalar(0.5)
+          : undefined,
     });
 
     this.gizmo = new ViewGizmo((view) => this.setView(view));

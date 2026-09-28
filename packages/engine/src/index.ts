@@ -342,4 +342,4 @@ export { manifoldToMesh, meshToManifold } from './kernel/primitives.js';
 export type { Assembly, Piece, RGBA } from './kernel/geometry.js';
 
 /** Engine version, reported by `betterscad --version` and the about panel. */
-export const ENGINE_VERSION = '0.14.0';
+export const ENGINE_VERSION = '0.15.0';

@@ -14,7 +14,7 @@
  * orbit's equator — right where you drag through to look at the back of a model.
  */
 
-import { MathUtils, PerspectiveCamera, Vector2, Vector3 } from 'three';
+import { MathUtils, PerspectiveCamera, Quaternion, Vector2, Vector3 } from 'three';
 
 export interface ControlsOptions {
   onChange(): void;
@@ -23,6 +23,11 @@ export interface ControlsOptions {
    * zooms towards.
    */
   pick?(clientX: number, clientY: number): Vector3 | undefined;
+  /**
+   * The middle of the model, if there is one: what a drag that starts over
+   * empty space orbits about.
+   */
+  center?(): Vector3 | undefined;
 }
 
 export type StandardView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso';
@@ -74,6 +79,8 @@ export class OrbitCamera {
   private lastSingle = new Vector2();
   private lastPinchDistance = 0;
   private mode: 'none' | 'orbit' | 'pan' | 'zoom' = 'none';
+  /** What the current drag orbits about, picked once when it starts. */
+  private pivot?: Vector3;
 
   private animation?: { from: [number, number]; to: [number, number]; start: number; duration: number };
 
@@ -278,10 +285,34 @@ export class OrbitCamera {
     // A drag always wins over a running transition; without this, grabbing the
     // cube mid-snap fights the animation for the next few frames.
     this.animation = undefined;
+    const before = this.offsetFor(this.azimuth, this.polar).normalize();
+    const azimuth = this.azimuth;
     // Dragging right turns the model right; dragging down lifts the eye, as in
     // every orbit control people will already have used.
     this.azimuth -= dx * this.rotateSpeed;
-    this.polar -= dy * this.rotateSpeed;
+    this.polar = MathUtils.clamp(
+      this.polar - dy * this.rotateSpeed,
+      POLAR_LIMIT,
+      Math.PI - POLAR_LIMIT,
+    );
+
+    // The angles turn the camera about the target, but the target is only
+    // wherever the last pan or zoom left it — often empty space off to one side
+    // of the model, so the model swings round an axis nobody can see. Turning
+    // the target by the same rotation about the pivot makes the pivot the
+    // centre of the orbit instead, and leaves it where it was on screen.
+    const pivot = this.pivot ?? this.options.center?.();
+    if (pivot) {
+      const tilt = new Quaternion().setFromUnitVectors(
+        before,
+        this.offsetFor(azimuth, this.polar).normalize(),
+      );
+      const turn = new Quaternion().setFromAxisAngle(
+        new Vector3(0, 0, 1),
+        this.azimuth - azimuth,
+      );
+      this.target.sub(pivot).applyQuaternion(turn.multiply(tilt)).add(pivot);
+    }
     this.apply();
   }
 
@@ -316,6 +347,12 @@ export class OrbitCamera {
       // Middle/right drag pans, as in every other CAD tool; shift-drag too, for
       // trackpads with no middle button.
       this.mode = event.button === 0 && !event.shiftKey ? 'orbit' : 'pan';
+      // Orbit about the part you grabbed, or the model when you grabbed
+      // nothing; picked here, once, because the pivot must not move mid-drag.
+      this.pivot =
+        this.mode === 'orbit'
+          ? (this.options.pick?.(event.clientX, event.clientY) ?? this.options.center?.())
+          : undefined;
     } else if (this.pointers.size === 2) {
       this.mode = 'zoom';
       this.lastPinchDistance = this.pinchDistance();
@@ -353,7 +390,10 @@ export class OrbitCamera {
     if (this.element.hasPointerCapture(event.pointerId)) {
       this.element.releasePointerCapture(event.pointerId);
     }
-    if (this.pointers.size === 0) this.mode = 'none';
+    if (this.pointers.size === 0) {
+      this.mode = 'none';
+      this.pivot = undefined;
+    }
     else if (this.pointers.size === 1) {
       const [remaining] = [...this.pointers.values()];
       this.lastSingle.copy(remaining);
