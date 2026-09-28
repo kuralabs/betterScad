@@ -15,6 +15,7 @@ import { FLOW, MODIFIERS, OTHER, SPECIAL_VARIABLES, SYNTAX } from './openscad-la
 import { LISTS_AND_STRINGS, MATH, TYPES } from './openscad-functions.js';
 import {
   LANGUAGE_ADDITIONS,
+  MEASURING,
   NEGATIVE_SPACE,
   NEW_SHAPES,
   PORTABILITY,
@@ -53,7 +54,7 @@ export const SECTIONS: ReferenceSection[] = [
     blurb:
       'What BetterSCAD adds on top, under one rule: every addition has a defined way back to ' +
       'plain `.scad`. Each entry says what it becomes when you save as OpenSCAD.',
-    groups: [NEW_SHAPES, NEGATIVE_SPACE, SHORTHAND, LANGUAGE_ADDITIONS, PORTABILITY],
+    groups: [NEW_SHAPES, NEGATIVE_SPACE, SHORTHAND, MEASURING, LANGUAGE_ADDITIONS, PORTABILITY],
   },
 ];
 

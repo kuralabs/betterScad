@@ -37,7 +37,8 @@ export type Expr =
   | LetExpr
   | AssertExpr
   | EchoExpr
-  | LambdaExpr;
+  | LambdaExpr
+  | MeasureExpr;
 
 export interface NodeBase {
   span: SourceSpan;
@@ -197,6 +198,40 @@ export interface LambdaExpr extends NodeBase {
   kind: 'lambda';
   params: Parameter[];
   body: Expr;
+}
+
+/**
+ * `get_size(bracket())` / `get_position(bracket())` — a BetterSCAD extension.
+ *
+ * The argument is geometry, not a value: a statement, parsed as one, which
+ * stock OpenSCAD's grammar has no place for inside an expression. The object
+ * is built and measured while the code runs; the legacy export writes the
+ * measured value in its place.
+ */
+export interface MeasureExpr extends NodeBase {
+  kind: 'measure';
+  /** `size` for `get_size()`, `position` for `get_position()`. */
+  measure: 'size' | 'position';
+  /** What is measured: a module call, a block, a `for`, an `if`. */
+  body: Statement;
+  /** Span of just the function name. */
+  nameSpan: SourceSpan;
+}
+
+/** The functions that take an object rather than a value, and what each reads. */
+export const MEASURE_FUNCTIONS: Record<string, MeasureExpr['measure']> = {
+  get_size: 'size',
+  get_position: 'position',
+};
+
+/**
+ * Where a `get_size()` was written, as the key its measurements are kept under.
+ *
+ * The file and offset rather than the node, because the export parses the
+ * source again and gets different nodes for the same calls.
+ */
+export function measureKey(span: SourceSpan): string {
+  return `${span.file}:${span.start.offset}`;
 }
 
 export interface Parameter {

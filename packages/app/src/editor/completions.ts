@@ -486,6 +486,24 @@ const FUNCTIONS: BuiltinDoc[] = [
     forms: [{ template: 'chr([${1:code}, ${1:code}])', detail: 'chr(list)' }],
   },
   { label: 'ord', template: 'ord(${1:s})', detail: 'ord(string)', info: 'Code point of the first character.', type: 'function' },
+  {
+    label: 'get_size',
+    template: 'get_size(${1:object})',
+    detail: 'get_size(object)  — BetterSCAD',
+    info:
+      'The size of an object\'s bounding box, as `[x, y, z]`: `get_size(bracket()).z` is how tall it is. ' +
+      'Flat shapes have z = 0.\n\nExports to `.scad` as the value it measures, which stays fixed.',
+    type: 'function',
+  },
+  {
+    label: 'get_position',
+    template: 'get_position(${1:object})',
+    detail: 'get_position(object)  — BetterSCAD',
+    info:
+      'The lowest corner of an object\'s bounding box, as `[x, y, z]` — where `cube()` would start ' +
+      'to cover the same space.\n\nExports to `.scad` as the value it measures, which stays fixed.',
+    type: 'function',
+  },
   { label: 'lookup', template: 'lookup(${1:key}, ${2:table})', detail: 'lookup(key, table)', info: 'Linear interpolation over a table of [key, value] pairs.', type: 'function' },
   {
     label: 'search',

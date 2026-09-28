@@ -8,11 +8,11 @@ This is the same content as the app’s **Help & Reference** view — the button
 
 Screenshots are rendered by the engine itself, from the code shown beside them. Where a faint grey ghost appears, that is the "before" — a `%` shape marking where the solid started.
 
-**Only want what BetterSCAD adds?** Jump to [BetterSCAD additions](#betterscad-additions) — 16 entries, each saying what it becomes when you save as plain `.scad`.
+**Only want what BetterSCAD adds?** Jump to [BetterSCAD additions](#betterscad-additions) — 18 entries, each saying what it becomes when you save as plain `.scad`.
 
 **OpenSCAD** — [3D shapes](#3d-shapes) · [2D shapes](#2d-shapes) · [Moving and changing shapes](#moving-and-changing-shapes) · [Combining shapes](#combining-shapes) · [Between 2D and 3D](#between-2d-and-3d) · [Writing a model](#writing-a-model) · [Repeating and choosing](#repeating-and-choosing) · [Modifier characters](#modifier-characters) · [Special variables](#special-variables) · [Maths](#maths) · [Lists and text](#lists-and-text) · [Checking types](#checking-types) · [Output and checks](#output-and-checks)
 
-**BetterSCAD additions** — [Shapes](#shapes) · [Negative space](#negative-space) · [Transforms without the brackets](#transforms-without-the-brackets) · [Language](#language) · [Getting back to plain OpenSCAD](#getting-back-to-plain-openscad)
+**BetterSCAD additions** — [Shapes](#shapes) · [Negative space](#negative-space) · [Transforms without the brackets](#transforms-without-the-brackets) · [Measuring](#measuring) · [Language](#language) · [Getting back to plain OpenSCAD](#getting-back-to-plain-openscad)
 
 ---
 
@@ -2417,13 +2417,13 @@ ECHO: undef
 
 `parent_module(n)` — the name of the module `n` levels up the call stack. It exists so that a module can behave differently depending on who called it, which is a thing worth being able to do and not a thing worth relying on.
 
-`textmetrics(…)` — the measured size of a string. It is in OpenSCAD’s development snapshots, not in the 2021.01 release BetterSCAD implements.
+`textmetrics(…)` — the measured size of a string. It is in OpenSCAD’s development snapshots, not in the 2021.01 release BetterSCAD implements. `get_size(text(…))` measures the same thing, and measures any other object too.
 
 Third-party libraries (BOSL2, MCAD) are also untested and unsupported. They lean on deep recursion and large list comprehensions; they may well work, and they are not promised to.
 
 `surface()` with an **image** heightmap works in the browser, which has an image decoder, but not in the command-line `bscad`, which reports a clear error rather than pulling an image codec into the engine. `.dat` grids work in both.
 
-See also: [`surface()`](#entry-surface) · [`version(), version_num()`](#entry-version)
+See also: [`surface()`](#entry-surface) · [`version(), version_num()`](#entry-version) · [`get_size()`](#entry-get_size)
 
 <a id="entry-assign"></a>
 
@@ -3117,6 +3117,119 @@ As with `mirror()`, the original is not kept. Write the part twice for both halv
 
 See also: [`mirror()`](#entry-mirror) · [`translatex(), translatey(), translatez()`](#entry-translatex) · [`rotatex(), rotatey(), rotatez()`](#entry-rotatex)
 
+## Measuring
+
+Ask how big a part is, instead of working it out by hand and keeping the sum up to date.
+
+<a id="entry-get_size"></a>
+
+### get_size()
+
+```
+get_size(object)
+```
+
+How big something is, as `[x, y, z]`. Hand it a part — a module, a shape, anything you could draw — and it tells you its width, depth and height, so the next part can be placed against it.
+
+```scad
+module base() cube([40, 30, 8]);
+module lid() cube([40, 30, 3]);
+
+base();
+color("orange") translate([0, 0, get_size(base()).z]) lid();
+```
+
+<img src="images/reference/get-size-stack.png" alt="The lid sits on the base however tall the base becomes." width="420">
+
+*The lid sits on the base however tall the base becomes.*
+
+```scad
+echo(get_size(difference() { cube(10); translate([0, 0, 6]) cube(20); }));
+```
+
+```
+ECHO: [10, 10, 6]
+```
+
+*The cut is measured, not the cube it was cut from.*
+
+```scad
+echo(get_size(circle(5)));
+```
+
+```
+ECHO: [10, 10, 0]
+```
+
+*Flat shapes have a z of 0.*
+
+| Argument | |
+| --- | --- |
+| `object` | What to measure, written as it would be drawn. |
+
+The object goes inside the brackets exactly as you would write it on its own line, just without the `;`: `get_size(bracket())`, `get_size(translate([5, 0, 0]) cube(4))`, `get_size({ cube(1); sphere(2); })`, `get_size(for (i = [0 : 3]) …)`.
+
+It is the size of the **bounding box**: the smallest box, lined up with the axes, that holds the whole object. A rotated part measures bigger than it did straight.
+
+The object is really built to measure it, so a `difference()` that cuts the top off is measured without the top. The part you measure and the part you then draw are built once between them, however many times either appears.
+
+Always three numbers, so `.x`, `.y` and `.z` always work. A flat shape has a z of `0`.
+
+`%` and `*` parts are not part of the object, as they are not part of an export; `#` parts are. An object with nothing in it gives `undef`, with a warning.
+
+The numbers are rounded to twelve significant figures, so `get_size(p).x == 30` is true of a part that is 30 wide, not false by a rounding error.
+
+A file that defines its own `function get_size` keeps its own: a plain call like `get_size(f(1))` still calls it.
+
+**Saved as OpenSCAD `.scad`:** OpenSCAD cannot measure anything, so each call is written as the value it measured, with the call kept in a comment beside it: `/* get_size(base()) */ [40, 30, 8]`. **The value is fixed** at the parameters the file was saved with; change a parameter in OpenSCAD and it will not follow. A call that gives a different answer each time it runs — one inside a module, measuring that module’s argument — has no single value to write, and saving refuses and names the line. Measure outside, and pass the value in.
+
+See also: [`get_position()`](#entry-get_position) · [`translate()`](#entry-translate) · [`resize()`](#entry-resize)
+
+<a id="entry-get_position"></a>
+
+### get_position()
+
+```
+get_position(object)
+```
+
+Where something starts, as `[x, y, z]`: the corner of its bounding box nearest the origin. Together with `get_size()` it tells you exactly where a part is and how much room it takes.
+
+```scad
+module part() translate([6, 4, 0]) cylinder(h = 12, r = 5, $fn = 48);
+
+part();
+%translate(get_position(part())) cube(get_size(part()));
+```
+
+<img src="images/reference/get-position-box.png" alt="The part’s bounding box, drawn as a ghost around it." width="420">
+
+*The part’s bounding box, drawn as a ghost around it.*
+
+```scad
+echo(get_position(translate([6, 4, 0]) cylinder(h = 12, r = 5, $fn = 4)));
+```
+
+```
+ECHO: [1, -1, 0]
+```
+
+*The lowest corner, not the centre.*
+
+| Argument | |
+| --- | --- |
+| `object` | What to measure, written as it would be drawn. |
+
+The object is written the same way as for `get_size()`, and measured the same way.
+
+It is the corner `cube()` grows from, which is what makes the two fit together: `translate(get_position(p)) cube(get_size(p))` fills exactly the space `p` takes up.
+
+The far corner is `get_position(p) + get_size(p)`.
+
+**Saved as OpenSCAD `.scad`:** The same as `get_size()`: written as the value it measured, fixed from then on.
+
+See also: [`get_size()`](#entry-get_size) · [`translate()`](#entry-translate)
+
 ## Language
 
 Two small additions to the language itself.
@@ -3208,6 +3321,8 @@ It lives in the **Save** menu, and is offered whatever the file’s extension is
 Two rules govern what comes out. A one-liner is rewritten in place — `translatez(4)` becomes `translate([0, 0, 4])` on the spot. Anything larger becomes a **generated module**, named `__<shape>`, defined once however many times it is used, so the exported file keeps the shape of the file that produced it.
 
 A generated name that the source already declares gets a numbered suffix rather than shadowing it.
+
+`get_size()` and `get_position()` are written as the values they measured, which only a render can supply, so saving compiles the model first with its current parameters. The values are fixed from then on.
 
 `is_range()` is the single exception, and says so in its own entry.
 

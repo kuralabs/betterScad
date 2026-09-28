@@ -55,6 +55,8 @@ const BUILTIN_FUNCTIONS = new Set([
   'cross', 'concat', 'lookup', 'len', 'search', 'str', 'chr', 'ord', 'rands',
   'is_undef', 'is_bool', 'is_num', 'is_string', 'is_list', 'is_function',
   'is_range', 'version', 'version_num', 'echo', 'assert',
+  // BetterSCAD
+  'get_size', 'get_position',
 ]);
 
 /** Tags for the token classes that have no natural equivalent in `@lezer/highlight`. */

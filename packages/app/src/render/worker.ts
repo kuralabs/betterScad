@@ -12,7 +12,9 @@ import {
   FontRegistry,
   exportResult,
   fontsReferenced,
+  parse,
   toStockScad,
+  usesMeasurements,
   type AssetProvider,
   type Value,
 } from '@betterscad/engine';
@@ -70,7 +72,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         handleFont(request);
         return;
       case 'transpile':
-        handleTranspile(request);
+        await handleTranspile(request);
         return;
       case 'set-files':
         projectFiles = request.files;
@@ -294,10 +296,27 @@ async function handleExport(request: ExportRequest): Promise<void> {
 /**
  * Rewrites to stock `.scad` here rather than on the main thread, because
  * `text(radius = …)` is rewritten from measured glyph widths and the fonts are
- * loaded into this worker.
+ * loaded into this worker, and `get_size()` is written as what it measures,
+ * which takes the kernel.
  */
-function handleTranspile(request: TranspileRequest): void {
-  const result = toStockScad(request.source, request.file, { fonts });
+async function handleTranspile(request: TranspileRequest): Promise<void> {
+  // Compiled only when there is something to measure: most files have
+  // nothing, and should not wait for the kernel to load to find that out.
+  let measurements;
+  const parsed = parse(request.source, request.file);
+  if (usesMeasurements(parsed.file)) {
+    const compiled = await (await engine()).compile(request.source, {
+      file: request.file,
+      parameters: request.parameters as Record<string, Value>,
+      time: request.time,
+      // What a final render draws, which is what the file is meant to be.
+      preview: false,
+      resolveInclude: makeResolver(request.files, []),
+      assets: makeAssets([]),
+    });
+    measurements = compiled.measurements;
+  }
+  const result = toStockScad(request.source, request.file, { fonts, measurements });
   post({
     type: 'transpile-result',
     id: request.id,

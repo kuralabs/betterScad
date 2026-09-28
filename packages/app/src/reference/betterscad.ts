@@ -784,6 +784,114 @@ export const SHORTHAND: ReferenceGroup = {
   ],
 };
 
+export const MEASURING: ReferenceGroup = {
+  id: 'measuring',
+  title: 'Measuring',
+  blurb: 'Ask how big a part is, instead of working it out by hand and keeping the sum up to date.',
+  entries: [
+    {
+      id: 'get_size',
+      name: 'get_size()',
+      signature: 'get_size(object)',
+      extension: true,
+      plain:
+        'How big something is, as `[x, y, z]`. Hand it a part — a module, a shape, anything you ' +
+        'could draw — and it tells you its width, depth and height, so the next part can be ' +
+        'placed against it.',
+      details: [
+        'The object goes inside the brackets exactly as you would write it on its own line, just ' +
+          'without the `;`: `get_size(bracket())`, `get_size(translate([5, 0, 0]) cube(4))`, ' +
+          '`get_size({ cube(1); sphere(2); })`, `get_size(for (i = [0 : 3]) …)`.',
+        'It is the size of the **bounding box**: the smallest box, lined up with the axes, that ' +
+          'holds the whole object. A rotated part measures bigger than it did straight.',
+        'The object is really built to measure it, so a `difference()` that cuts the top off is ' +
+          'measured without the top. The part you measure and the part you then draw are built ' +
+          'once between them, however many times either appears.',
+        'Always three numbers, so `.x`, `.y` and `.z` always work. A flat shape has a z of `0`.',
+        '`%` and `*` parts are not part of the object, as they are not part of an export; `#` ' +
+          'parts are. An object with nothing in it gives `undef`, with a warning.',
+        'The numbers are rounded to twelve significant figures, so `get_size(p).x == 30` is ' +
+          'true of a part that is 30 wide, not false by a rounding error.',
+        'A file that defines its own `function get_size` keeps its own: a plain call like ' +
+          '`get_size(f(1))` still calls it.',
+      ],
+      params: [{ name: 'object', description: 'What to measure, written as it would be drawn.' }],
+      downgrade:
+        'OpenSCAD cannot measure anything, so each call is written as the value it measured, ' +
+        'with the call kept in a comment beside it: `/* get_size(base()) */ [40, 30, 8]`. **The ' +
+        'value is fixed** at the parameters the file was saved with; change a parameter in ' +
+        'OpenSCAD and it will not follow. A call that gives a different answer each time it runs ' +
+        '— one inside a module, measuring that module’s argument — has no single value to write, ' +
+        'and saving refuses and names the line. Measure outside, and pass the value in.',
+      examples: [
+        {
+          code: [
+            'module base() cube([40, 30, 8]);',
+            'module lid() cube([40, 30, 3]);',
+            '',
+            'base();',
+            'color("orange") translate([0, 0, get_size(base()).z]) lid();',
+          ].join('\n'),
+          image: 'get-size-stack',
+          caption: 'The lid sits on the base however tall the base becomes.',
+        },
+        {
+          code: 'echo(get_size(difference() { cube(10); translate([0, 0, 6]) cube(20); }));',
+          output: 'ECHO: [10, 10, 6]',
+          caption: 'The cut is measured, not the cube it was cut from.',
+        },
+        {
+          code: 'echo(get_size(circle(5)));',
+          output: 'ECHO: [10, 10, 0]',
+          caption: 'Flat shapes have a z of 0.',
+        },
+      ],
+      see: ['get_position', 'translate', 'resize'],
+      keywords: [
+        'size', 'bounds', 'bounding box', 'measure', 'dimensions', 'width', 'height', 'depth',
+        'extent', 'getbounds', 'bbox', 'textmetrics',
+      ],
+    },
+    {
+      id: 'get_position',
+      name: 'get_position()',
+      signature: 'get_position(object)',
+      extension: true,
+      plain:
+        'Where something starts, as `[x, y, z]`: the corner of its bounding box nearest the ' +
+        'origin. Together with `get_size()` it tells you exactly where a part is and how much ' +
+        'room it takes.',
+      details: [
+        'The object is written the same way as for `get_size()`, and measured the same way.',
+        'It is the corner `cube()` grows from, which is what makes the two fit together: ' +
+          '`translate(get_position(p)) cube(get_size(p))` fills exactly the space `p` takes up.',
+        'The far corner is `get_position(p) + get_size(p)`.',
+      ],
+      params: [{ name: 'object', description: 'What to measure, written as it would be drawn.' }],
+      downgrade: 'The same as `get_size()`: written as the value it measured, fixed from then on.',
+      examples: [
+        {
+          code: [
+            'module part() translate([6, 4, 0]) cylinder(h = 12, r = 5, $fn = 48);',
+            '',
+            'part();',
+            '%translate(get_position(part())) cube(get_size(part()));',
+          ].join('\n'),
+          image: 'get-position-box',
+          caption: 'The part’s bounding box, drawn as a ghost around it.',
+        },
+        {
+          code: 'echo(get_position(translate([6, 4, 0]) cylinder(h = 12, r = 5, $fn = 4)));',
+          output: 'ECHO: [1, -1, 0]',
+          caption: 'The lowest corner, not the centre.',
+        },
+      ],
+      see: ['get_size', 'translate'],
+      keywords: ['position', 'bounds', 'bounding box', 'corner', 'origin', 'where', 'measure'],
+    },
+  ],
+};
+
 export const LANGUAGE_ADDITIONS: ReferenceGroup = {
   id: 'language-additions',
   title: 'Language',
@@ -873,6 +981,9 @@ export const PORTABILITY: ReferenceGroup = {
           'exported file keeps the shape of the file that produced it.',
         'A generated name that the source already declares gets a numbered suffix rather than ' +
           'shadowing it.',
+        '`get_size()` and `get_position()` are written as the values they measured, which only ' +
+          'a render can supply, so saving compiles the model first with its current parameters. ' +
+          'The values are fixed from then on.',
         '`is_range()` is the single exception, and says so in its own entry.',
         'On the command line: `bscad model.bscad --legacy-scad -o out.scad`.',
       ],

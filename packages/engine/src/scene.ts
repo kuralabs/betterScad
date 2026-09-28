@@ -53,6 +53,12 @@ export function fragments(radius: number, res: Resolution): number {
   return Math.max(5, Math.ceil(Math.min(byAngle, byLength)));
 }
 
+/** A bounding box, as `get_size()` and `get_position()` read it. */
+export interface Bounds {
+  min: [number, number, number];
+  max: [number, number, number];
+}
+
 export type NodeOp =
   // 3D primitives
   | 'cube'

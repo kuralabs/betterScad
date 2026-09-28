@@ -9,7 +9,7 @@
 import type { CrossSection, Manifold, Mat3, Mat4 as ManifoldMat4, Vec2, Vec3 } from 'manifold-3d';
 
 import { DEFAULT_COLOR, ITEM_COLORS, parseColor } from '../colors.js';
-import { DiagnosticBag, SourceSpan } from '../diagnostics.js';
+import { Diagnostic, DiagnosticBag, SourceSpan } from '../diagnostics.js';
 import { FontRegistry } from '../fonts.js';
 import { TriMesh, weldVertices } from '../geom/mesh.js';
 import { gridFromGrayscale, parseSurfaceDat, surfaceToMesh } from '../geom/surface.js';
@@ -17,7 +17,16 @@ import { importDXF } from '../io/import/dxf.js';
 import { importMesh } from '../io/import/mesh.js';
 import { importSVG } from '../io/import/svg.js';
 import { Contribution, Display, resolveContribution, resolveDisplay } from '../roles.js';
-import { Mat4, Resolution, SceneNode, determinant3, fragments, isScopeGroup, walk } from '../scene.js';
+import {
+  Bounds,
+  Mat4,
+  Resolution,
+  SceneNode,
+  determinant3,
+  fragments,
+  isScopeGroup,
+  walk,
+} from '../scene.js';
 import { Value } from '../values.js';
 import { Arena, Assembly, Piece, RGBA, assembly, emptyAssembly } from './geometry.js';
 import {
@@ -70,6 +79,15 @@ export interface BuildOptions {
    * not the model's, so nothing that exports should ask for them.
    */
   varyColors?: boolean;
+  /**
+   * The session to build in, when the caller already has one.
+   *
+   * Passed by a render whose code measured geometry with `get_size()`: those
+   * measurements built subtrees the scene is about to draw, and building in the
+   * same session is what lets the render reuse them rather than build them
+   * again. Without one, a session lives for this build alone.
+   */
+  session?: GeometrySession;
 }
 
 export interface BuildResult {
@@ -93,6 +111,214 @@ interface Ctx {
   images: Map<string, { gray: Uint8Array; width: number; height: number }>;
   /** Hands out `Piece.item` ids; each `union()` takes the next one. */
   nextItem: number;
+  /** Built subtrees, by `shapeKey`; see `evaluateNode`. */
+  built: Map<number, Built>;
+  keys: ShapeKeys;
+}
+
+/**
+ * A subtree's result, and the item ids it handed out while being built.
+ *
+ * The ids are kept so a reuse can hand out fresh ones: two copies of one
+ * `union()` are two items, and would otherwise share a colour.
+ */
+interface Built {
+  result: Assembly;
+  firstItem: number;
+  endItem: number;
+}
+
+export interface SessionOptions {
+  api: ManifoldAPI;
+  /** Where kernel diagnostics go. A fresh bag when omitted. */
+  diagnostics?: DiagnosticBag;
+  fonts?: FontRegistry;
+  assets?: AssetProvider;
+}
+
+/**
+ * One render's worth of geometry, built once however often it is asked for.
+ *
+ * Every subtree is keyed by what it is — its operation, parameters, modifiers
+ * and children — and not by where it was written, so a part placed three
+ * times is built once and moved three times, and a part measured with
+ * `get_size()` and then drawn is built once as well. Manifold results are
+ * immutable, so handing one out twice is safe.
+ *
+ * The session owns every WASM handle it creates, and frees them all at once in
+ * `dispose()`; nothing it hands out survives that.
+ */
+export class GeometrySession {
+  readonly diagnostics: DiagnosticBag;
+  private readonly ctx: Ctx;
+  private readonly assets?: AssetProvider;
+  /** Paths already asked for, found or not, so each is read at most once. */
+  private readonly requested = new Set<string>();
+  /** Paths a measurement found missing, waiting for `loadAssets`. */
+  private readonly pending = new Map<string, boolean>();
+
+  constructor(options: SessionOptions) {
+    this.diagnostics = options.diagnostics ?? new DiagnosticBag();
+    this.assets = options.assets;
+    this.ctx = {
+      api: options.api,
+      arena: new Arena(),
+      diagnostics: this.diagnostics,
+      fonts: options.fonts,
+      files: new Map(),
+      images: new Map(),
+      nextItem: 0,
+      built: new Map(),
+      keys: new ShapeKeys(),
+    };
+  }
+
+  /**
+   * Files `root` imports that could be read but have not been yet.
+   *
+   * Asked before measuring, because reading is asynchronous and evaluation is
+   * not: a subtree measured without its file would measure as empty, and the
+   * empty result would then be reused.
+   */
+  unloadedAssets(root: SceneNode): string[] {
+    if (!this.assets) return [];
+    const missing: string[] = [];
+    for (const [path, image] of assetPaths(root)) {
+      if (this.requested.has(path)) continue;
+      missing.push(path);
+      this.pending.set(path, (this.pending.get(path) ?? false) || image);
+    }
+    return missing;
+  }
+
+  /**
+   * Reads every file `root` imports, and every file a measurement asked for,
+   * that has not been read yet.
+   *
+   * Done as a pre-pass so the recursive evaluator stays synchronous, which
+   * matters: an `await` per node turns a 50k-node scene into 50k microtasks.
+   */
+  async loadAssets(root?: SceneNode): Promise<void> {
+    const assets = this.assets;
+    if (!assets) return;
+    const ctx = this.ctx;
+    if (root) {
+      for (const [path, image] of assetPaths(root)) {
+        this.pending.set(path, (this.pending.get(path) ?? false) || image);
+      }
+    }
+    const wanted = [...this.pending].filter(([path]) => !this.requested.has(path));
+    this.pending.clear();
+    for (const [path] of wanted) this.requested.add(path);
+
+    await Promise.all(
+      wanted.map(async ([path, image]) => {
+        try {
+          const data = await assets.read(path);
+          if (!data) {
+            ctx.diagnostics.error(`Cannot read "${path}".`, undefined, 'kernel.asset-missing');
+            return;
+          }
+          ctx.files.set(path, data);
+          if (image && assets.decodeImage) {
+            const decoded = await assets.decodeImage(data, path);
+            if (decoded) ctx.images.set(path, decoded);
+          }
+        } catch (err) {
+          ctx.diagnostics.error(
+            `Failed to read "${path}": ${err instanceof Error ? err.message : String(err)}`,
+            undefined,
+            'kernel.asset-error',
+          );
+        }
+      }),
+    );
+  }
+
+  /**
+   * The bounding box of what `root` exports, or `undefined` when that is
+   * nothing.
+   *
+   * Only pieces count: a `%` ghost is not part of the object, and a negative
+   * still looking for something to cut has not cut it yet. Flat geometry sits
+   * at z = 0.
+   */
+  measure(root: SceneNode): Bounds | undefined {
+    const result = evaluateNode(root, this.ctx);
+    let bounds: Bounds | undefined;
+    for (const piece of result.pieces) {
+      let min: [number, number, number];
+      let max: [number, number, number];
+      if (piece.dim === 3) {
+        const solid = piece.solid as Manifold;
+        if (solid.isEmpty()) continue;
+        const box = solid.boundingBox();
+        min = [box.min[0], box.min[1], box.min[2]];
+        max = [box.max[0], box.max[1], box.max[2]];
+      } else {
+        const section = piece.solid as CrossSection;
+        if (section.isEmpty()) continue;
+        const rect = section.bounds();
+        min = [rect.min[0], rect.min[1], 0];
+        max = [rect.max[0], rect.max[1], 0];
+      }
+      if (!bounds) bounds = { min, max };
+      else {
+        for (let i = 0; i < 3; i++) {
+          bounds.min[i] = Math.min(bounds.min[i], min[i]);
+          bounds.max[i] = Math.max(bounds.max[i], max[i]);
+        }
+      }
+    }
+    return bounds;
+  }
+
+  /** Builds the scene, reusing whatever this session has already built. */
+  async build(root: SceneNode, options: { merge?: boolean; varyColors?: boolean } = {}): Promise<BuildResult> {
+    await this.loadAssets(root);
+    // Item ids only have to be unique within a build, and a reused subtree
+    // takes fresh ones, so counting from zero again is safe.
+    this.ctx.nextItem = 0;
+    const result = evaluateNode(root, this.ctx);
+    return extract(result, this.ctx, options.merge === true, options.varyColors === true);
+  }
+
+  /**
+   * Takes the diagnostics reported since the last call.
+   *
+   * A compile takes the ones its measurements raised, and the build after it
+   * takes its own; without draining, the second would repeat the first.
+   */
+  drainDiagnostics(): Diagnostic[] {
+    return this.diagnostics.items.splice(0);
+  }
+
+  /** How many distinct subtrees have been built. For tests and profiling. */
+  get builtCount(): number {
+    return this.ctx.built.size;
+  }
+
+  /**
+   * Frees every WASM handle the session made. Call only after results are
+   * copied out to JS, which `build` does.
+   */
+  dispose(): void {
+    this.ctx.arena.disposeAll();
+    this.ctx.built.clear();
+  }
+}
+
+/** Every file a subtree imports, and whether it is read as an image. */
+function assetPaths(root: SceneNode): Map<string, boolean> {
+  const paths = new Map<string, boolean>();
+  for (const node of walk(root)) {
+    if (node.op !== 'import' && node.op !== 'surface') continue;
+    const file = String(node.params.file ?? '');
+    if (!file) continue;
+    const image = node.op === 'surface' && !/\.dat$/i.test(file);
+    paths.set(file, (paths.get(file) ?? false) || image);
+  }
+  return paths;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,78 +326,144 @@ interface Ctx {
 // ---------------------------------------------------------------------------
 
 export async function buildGeometry(root: SceneNode, options: BuildOptions): Promise<BuildResult> {
-  const arena = new Arena();
-  const ctx: Ctx = {
-    api: options.api,
-    arena,
-    diagnostics: options.diagnostics,
-    fonts: options.fonts,
-    files: new Map(),
-    images: new Map(),
-    nextItem: 0,
-  };
-
-  await preloadAssets(root, options, ctx);
-
+  if (options.session) {
+    return options.session.build(root, { merge: options.merge, varyColors: options.varyColors });
+  }
+  const session = new GeometrySession(options);
   try {
-    const result = evaluateNode(root, ctx);
-    return extract(result, ctx, options.merge === true, options.varyColors === true);
+    return await session.build(root, { merge: options.merge, varyColors: options.varyColors });
   } finally {
     // Everything the caller needs has been copied into plain typed arrays by
     // `extract`, so the whole WASM-side working set can go at once.
-    arena.disposeAll();
+    session.dispose();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reuse
+// ---------------------------------------------------------------------------
+
+/**
+ * Numbers subtrees by what they are, so equal ones share a number.
+ *
+ * Hash-consing rather than hashing: each node's key is its own operation,
+ * parameters and modifiers plus its children's *numbers*, interned in a map, so
+ * two numbers are equal exactly when the subtrees are — there is no collision
+ * to be unlucky with, which matters when the price of one is the wrong
+ * geometry. Each node is keyed once, however deep the tree, because its
+ * children's numbers are already known.
+ *
+ * The span is left out on purpose: it is where a shape was written, not what
+ * it is, and two copies of one part are written in two places.
+ */
+class ShapeKeys {
+  private readonly ids = new Map<string, number>();
+  private readonly memo = new WeakMap<SceneNode, number>();
+  private next = 0;
+
+  of(node: SceneNode): number {
+    const known = this.memo.get(node);
+    if (known !== undefined) return known;
+    const params = stableKey(node.params);
+    // A parameter this cannot spell is a parameter it cannot compare, so the
+    // node gets a number of its own and is never reused.
+    const text =
+      params === undefined
+        ? undefined
+        : `${node.op}\u0001${params}\u0001${node.roles.join(',')}\u0001${node.children
+            .map((child) => this.of(child))
+            .join(',')}`;
+    let id = text === undefined ? undefined : this.ids.get(text);
+    if (id === undefined) {
+      id = this.next++;
+      if (text !== undefined) this.ids.set(text, id);
+    }
+    this.memo.set(node, id);
+    return id;
   }
 }
 
 /**
- * Fetches every `import()`/`surface()` file up front.
+ * An exact spelling of a parameter value, or `undefined` when there is none.
  *
- * Doing this as a pre-pass keeps the recursive evaluator synchronous, which
- * matters: an `await` per node turns a 50k-node scene into 50k microtasks.
+ * Not `JSON.stringify`: that writes `NaN` and `Infinity` as `null`, and `-0`
+ * as `0`, and a mirror is exactly where a `-0` turns up.
  */
-async function preloadAssets(root: SceneNode, options: BuildOptions, ctx: Ctx): Promise<void> {
-  if (!options.assets) return;
-  const wanted = new Set<string>();
-  const images = new Set<string>();
-
-  for (const node of walk(root)) {
-    if (node.op === 'import' || node.op === 'surface') {
-      const file = String(node.params.file ?? '');
-      if (!file) continue;
-      wanted.add(file);
-      if (node.op === 'surface' && !/\.dat$/i.test(file)) images.add(file);
-    }
-  }
-
-  await Promise.all(
-    [...wanted].map(async (path) => {
-      try {
-        const data = await options.assets!.read(path);
-        if (!data) {
-          ctx.diagnostics.error(`Cannot read "${path}".`, undefined, 'kernel.asset-missing');
-          return;
-        }
-        ctx.files.set(path, data);
-        if (images.has(path) && options.assets!.decodeImage) {
-          const decoded = await options.assets!.decodeImage(data, path);
-          if (decoded) ctx.images.set(path, decoded);
-        }
-      } catch (err) {
-        ctx.diagnostics.error(
-          `Failed to read "${path}": ${err instanceof Error ? err.message : String(err)}`,
-          undefined,
-          'kernel.asset-error',
-        );
+function stableKey(value: unknown): string | undefined {
+  switch (typeof value) {
+    case 'number':
+      return Object.is(value, -0) ? '-0' : String(value);
+    case 'string':
+      return JSON.stringify(value);
+    case 'boolean':
+      return value ? 'T' : 'F';
+    case 'undefined':
+      return 'U';
+    case 'object': {
+      if (value === null) return 'N';
+      if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+        const items = Array.from(value as ArrayLike<unknown>, stableKey);
+        return items.includes(undefined) ? undefined : `[${items.join(',')}]`;
       }
-    }),
-  );
+      if (Object.getPrototypeOf(value) !== Object.prototype) return undefined;
+      const parts: string[] = [];
+      for (const name of Object.keys(value).sort()) {
+        const inner = stableKey((value as Record<string, unknown>)[name]);
+        if (inner === undefined) return undefined;
+        parts.push(`${JSON.stringify(name)}:${inner}`);
+      }
+      return `{${parts.join(',')}}`;
+    }
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Hands a built subtree out again, with fresh item ids if it took any.
+ *
+ * Only the ids it took itself move. An id from outside cannot be in it: items
+ * are handed out by the `union()` that owns them, which is inside.
+ */
+function reissue(built: Built, ctx: Ctx): Assembly {
+  const count = built.endItem - built.firstItem;
+  if (count === 0) return built.result;
+  const shift = ctx.nextItem - built.firstItem;
+  ctx.nextItem += count;
+  const move = (piece: Piece): Piece =>
+    piece.item !== undefined && piece.item >= built.firstItem && piece.item < built.endItem
+      ? { ...piece, item: piece.item + shift }
+      : piece;
+  const { result } = built;
+  return {
+    pieces: result.pieces.map(move),
+    annotations: result.annotations.map(move),
+    negatives: result.negatives.map(move),
+    isolated: result.isolated,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Node evaluation
 // ---------------------------------------------------------------------------
 
+/**
+ * Evaluates a node, or hands back the result of an equal one built earlier.
+ *
+ * Diagnostics are reported the first time only. A warning about a part is a
+ * warning about every copy of it, and saying it once per copy is noise.
+ */
 function evaluateNode(node: SceneNode, ctx: Ctx): Assembly {
+  const key = ctx.keys.of(node);
+  const known = ctx.built.get(key);
+  if (known) return reissue(known, ctx);
+  const firstItem = ctx.nextItem;
+  const result = buildNode(node, ctx);
+  ctx.built.set(key, { result, firstItem, endItem: ctx.nextItem });
+  return result;
+}
+
+function buildNode(node: SceneNode, ctx: Ctx): Assembly {
   switch (node.op) {
     // --- 3D primitives ---
     case 'cube':

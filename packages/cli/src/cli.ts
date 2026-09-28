@@ -19,6 +19,7 @@ import {
   parse,
   parseBscad,
   toStockScad,
+  usesMeasurements,
   type AssetProvider,
   type Diagnostic,
   type ExportFormat,
@@ -92,11 +93,13 @@ export async function main(argv: string[]): Promise<void> {
     if (!options.quiet) log(`font: ${face.family} (${face.style})`);
   }
 
-  // Transpiling needs no geometry kernel, so it skips the WASM load entirely —
-  // but it does need the fonts, because `text(radius = …)` is rewritten from
-  // measured glyph widths.
+  // Transpiling mostly needs no geometry kernel, so the WASM is loaded only for
+  // a file that measures with `get_size()`. It does need the fonts, because
+  // `text(radius = …)` is rewritten from measured glyph widths.
   if (options.legacy) {
-    for (const input of options.input) await transpileFile(input, options, fonts);
+    let engine: Promise<Engine> | undefined;
+    const kernel = () => (engine ??= Engine.create({ fonts }));
+    for (const input of options.input) await transpileFile(input, options, fonts, kernel);
     return;
   }
 
@@ -119,6 +122,16 @@ export async function main(argv: string[]): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
+/** Presets stored in the file are the baseline; -D overrides win over them. */
+function parametersFor(
+  metadata: ReturnType<typeof parseBscad>['metadata'],
+  options: Options,
+): Record<string, Value> {
+  const presetName = metadata.activePreset;
+  const preset = (presetName && metadata.presets?.[presetName]) ?? {};
+  return { ...(preset as Record<string, Value>), ...options.parameters };
+}
+
 async function renderFile(
   engine: Engine,
   input: string,
@@ -130,10 +143,7 @@ async function renderFile(
   // A `.bscad` file is a `.scad` superset; strip the metadata header first.
   const { source, metadata } = parseBscad(raw);
 
-  // Presets stored in the file are the baseline; -D overrides win over them.
-  const presetName = metadata.activePreset;
-  const preset = (presetName && metadata.presets?.[presetName]) ?? {};
-  const parameters = { ...(preset as Record<string, Value>), ...options.parameters };
+  const parameters = parametersFor(metadata, options);
 
   const frameCount = options.frames ?? 1;
 
@@ -173,10 +183,32 @@ async function renderFile(
   }
 }
 
-async function transpileFile(input: string, options: Options, fonts: FontRegistry): Promise<void> {
+async function transpileFile(
+  input: string,
+  options: Options,
+  fonts: FontRegistry,
+  kernel: () => Promise<Engine>,
+): Promise<void> {
   const raw = await readFile(input, 'utf8');
-  const { source } = parseBscad(raw);
-  const result = toStockScad(source, basename(input), { fonts });
+  const { source, metadata } = parseBscad(raw);
+  const file = basename(input);
+
+  // `get_size()` is written as what it measures, so the file is compiled
+  // first, with the same parameters a render of it would use.
+  let measurements;
+  const parsed = parse(source, file);
+  if (usesMeasurements(parsed.file)) {
+    const compiled = await (await kernel()).compile(source, {
+      file,
+      parameters: parametersFor(metadata, options),
+      time: options.time,
+      preview: false,
+      resolveInclude: makeResolver(input),
+      assets: makeAssets(input),
+    });
+    measurements = compiled.measurements;
+  }
+  const result = toStockScad(source, file, { fonts, measurements });
 
   if (result.errors.length > 0) {
     for (const error of result.errors) process.stderr.write(formatDiagnostic(input, error) + '\n');

@@ -1068,6 +1068,20 @@ class App {
     return extensions;
   }
 
+  /**
+   * Asks the worker for the stock `.scad` a document downgrades to, compiled as
+   * a render of it would be: `get_size()` is written as what it measures, and
+   * that depends on the parameters and includes it is rendered with.
+   */
+  private transpileDocument(doc: Document) {
+    this.client.setProjectFiles(this.projectFiles.payload(), this.projectFiles.revision);
+    return this.client.transpile(doc.text, doc.name, {
+      files: this.workspace.fileMap(doc.id),
+      parameters: doc.parameters,
+      time: this.animationTime,
+    });
+  }
+
   /** Shows the stock `.scad` the open file downgrades to (spec feature 21). */
   private async previewDowngrade(): Promise<void> {
     const doc = this.workspace.active;
@@ -1076,7 +1090,7 @@ class App {
 
     // Through the worker: the rewrite of `text(radius = …)` needs the glyph
     // widths, and the fonts are loaded there.
-    const result = await this.client.transpile(doc.text, doc.name);
+    const result = await this.transpileDocument(doc);
     if (result.errors.length > 0) {
       this.reportError(`Cannot preview the downgrade: ${result.errors[0].message}`);
       return;
@@ -1143,7 +1157,7 @@ class App {
    * original.
    */
   private async writeStockScad(doc: Document): Promise<void> {
-    const result = await this.client.transpile(doc.text, doc.name);
+    const result = await this.transpileDocument(doc);
     if (result.errors.length > 0) {
       this.reportError(`Cannot save as .scad: ${result.errors[0].message}`);
       return;

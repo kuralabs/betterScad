@@ -18,14 +18,18 @@ import {
   Expr,
   ForClause,
   ListElement,
+  MEASURE_FUNCTIONS,
+  MeasureExpr,
   ModuleDecl,
   Parameter,
   ScadFile,
   Statement,
+  measureKey,
 } from './ast.js';
 import { BUILTIN_FUNCTIONS, BuiltinContext, echoArgs } from './builtins.js';
 import { DiagnosticBag, ScadError, SourceSpan } from './diagnostics.js';
 import {
+  Bounds,
   DEFAULT_RESOLUTION,
   EASE_SLICES,
   IDENTITY,
@@ -160,6 +164,24 @@ export interface EvaluateOptions {
   maxRecursionDepth?: number;
   /** Hard ceiling on instantiated nodes; stops runaway recursion killing the tab. */
   maxNodes?: number;
+  /**
+   * Builds and measures the objects `get_size()` and `get_position()` are
+   * given. Without one, both warn and return undef.
+   */
+  measurer?: Measurer;
+}
+
+/** The geometry side of `get_size()`, supplied by whoever owns the kernel. */
+export interface Measurer {
+  /**
+   * Files the object imports that have not been read yet.
+   *
+   * Reading is asynchronous and evaluation is not, so a measurement that needs
+   * one is left as undef and reported in `unloadedAssets`; the caller reads
+   * them and evaluates again.
+   */
+  unloaded(object: SceneNode): string[];
+  measure(object: SceneNode): Bounds | undefined;
 }
 
 export interface EvaluateResult {
@@ -167,6 +189,15 @@ export interface EvaluateResult {
   diagnostics: DiagnosticBag;
   /** Top-level variable values after evaluation, for the Customizer to read back. */
   topLevelVars: Map<string, Value>;
+  /**
+   * What each `get_size()` / `get_position()` measured, by `measureKey`: every
+   * distinct value it produced, in the order they came. One value means the
+   * call can be written as that value; more means it measures a different
+   * object each time it runs.
+   */
+  measurements: Map<string, Value[]>;
+  /** Files a measurement needed that were not loaded; see `Measurer.unloaded`. */
+  unloadedAssets: Set<string>;
 }
 
 /**
@@ -202,6 +233,8 @@ class Interpreter {
   private readonly includes: Map<string, ScadFile>;
   /** Guards against `include` cycles. */
   private readonly includeStack: string[] = [];
+  private readonly measurements = new Map<string, Value[]>();
+  private readonly unloadedAssets = new Set<string>();
 
   constructor(private readonly options: EvaluateOptions) {
     this.maxDepth = options.maxRecursionDepth ?? MAX_RECURSION_DEFAULT;
@@ -249,6 +282,8 @@ class Interpreter {
       root: scopeGroup(children),
       diagnostics: this.diagnostics,
       topLevelVars: root.vars,
+      measurements: this.measurements,
+      unloadedAssets: this.unloadedAssets,
     };
   }
 
@@ -1016,6 +1051,9 @@ class Interpreter {
       case 'call':
         return this.evalCall(expr, scope);
 
+      case 'measure':
+        return this.evalMeasure(expr, scope);
+
       default: {
         const never: never = expr;
         throw new Error(`Unhandled expression ${(never as Expr).kind}`);
@@ -1288,6 +1326,16 @@ class Interpreter {
         return builtin.fn(args, { ...this.builtinContext, span: expr.span });
       }
 
+      if (Object.hasOwn(MEASURE_FUNCTIONS, name)) {
+        // Parsed as a call only because its argument did not look like an
+        // object, so "unknown function" would be false as well as unhelpful.
+        this.diagnostics.warn(
+          `\`${name}()\` measures an object, as in \`${name}(cube(10))\`, not a value; using undef.`,
+          expr.span,
+          'eval.measure-not-object',
+        );
+        return undefined;
+      }
       this.diagnostics.warn(`\`${name}()\` is not a known function.`, expr.span, 'eval.unknown-function');
       return undefined;
     }
@@ -1300,6 +1348,73 @@ class Interpreter {
       'eval.not-callable',
     );
     return undefined;
+  }
+
+  /**
+   * `get_size(object)` and `get_position(object)`.
+   *
+   * The object is instantiated exactly as it would be as a statement here,
+   * then built and measured. Built in the render's own geometry session, so
+   * measuring a part and then drawing it builds it once.
+   *
+   * Always three numbers, so `.z` works on a flat shape too: its z is 0.
+   */
+  private evalMeasure(expr: MeasureExpr, scope: Scope): Value {
+    const name = expr.measure === 'size' ? 'get_size' : 'get_position';
+
+    // A file written before these existed may have a `get_size()` of its own,
+    // and calls it the ordinary way. Its function wins, as a user's function
+    // wins over any built-in.
+    const own = scope.lookupFunction(name);
+    const asArgument = own && callExprOf(expr.body);
+    if (own && asArgument) {
+      return this.invokeFunction(
+        new FunctionValue(own.params, own.body, own.scope, own.name),
+        [{ value: asArgument, span: asArgument.span }],
+        scope,
+        expr.span,
+      );
+    }
+
+    const kids: SceneNode[] = [];
+    this.executeStatement(expr.body, new Scope(scope, scope), kids, expr.span.file);
+    const object = group(kids);
+
+    const measurer = this.options.measurer;
+    if (!measurer) {
+      this.diagnostics.warn(
+        `\`${name}()\` needs the geometry kernel, which is not loaded here; using undef.`,
+        expr.nameSpan,
+        'eval.measure-no-kernel',
+      );
+      return undefined;
+    }
+    const unloaded = measurer.unloaded(object);
+    if (unloaded.length > 0) {
+      for (const path of unloaded) this.unloadedAssets.add(path);
+      return undefined;
+    }
+
+    const bounds = measurer.measure(object);
+    let value: Value;
+    if (!bounds) {
+      this.diagnostics.warn(
+        `\`${name}()\`: the object has no geometry to measure; using undef.`,
+        expr.span,
+        'eval.measure-empty',
+      );
+      value = undefined;
+    } else if (expr.measure === 'size') {
+      value = bounds.max.map((high, i) => settle(high - bounds.min[i]));
+    } else {
+      value = bounds.min.map(settle);
+    }
+
+    const key = measureKey(expr.span);
+    const seen = this.measurements.get(key);
+    if (!seen) this.measurements.set(key, [value]);
+    else if (!seen.some((v) => deepEqual(v, value))) seen.push(value);
+    return value;
   }
 
   private bindBuiltinFunctionArgs(
@@ -1369,6 +1484,36 @@ class Interpreter {
   error(message: string, span?: SourceSpan, code?: string): void {
     this.diagnostics.error(message, span, code);
   }
+}
+
+/**
+ * A measured number with the floating-point dust knocked off.
+ *
+ * A box translated by 0.1 three times measures 29.999999999999996 wide, and
+ * `get_size(box()).x == 30` should be true of it. Twelve significant figures
+ * is a nanometre on a metre-long part, far below anything that can be made.
+ */
+function settle(n: number): number {
+  return n === 0 ? 0 : Number.parseFloat(n.toPrecision(12));
+}
+
+/**
+ * The ordinary call a measured object would be, if it were a value.
+ *
+ * `get_size(foo(1))` parses as a measurement, but in a file with a
+ * `function get_size` of its own it was always a call of `foo(1)`. Only a
+ * plain module call reads both ways; a block or a `for` was never a value.
+ */
+function callExprOf(stmt: Statement): Extract<Expr, { kind: 'call' }> | undefined {
+  if (stmt.kind !== 'module-call' || stmt.children.length > 0 || stmt.roles.length > 0) {
+    return undefined;
+  }
+  return {
+    kind: 'call',
+    callee: { kind: 'identifier', name: stmt.name, span: stmt.nameSpan },
+    args: stmt.args,
+    span: stmt.span,
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -19,14 +19,22 @@ import { CustomizerModel, buildCustomizerModel } from './customizer.js';
 import { Diagnostic, DiagnosticBag } from './diagnostics.js';
 import { FontRegistry } from './fonts.js';
 import { ExportFormat, ExportedFile, exportResult } from './io/export/index.js';
-import { AssetProvider, BuildResult, buildGeometry } from './kernel/evaluate.js';
-import { ManifoldAPI, WasmOptions, loadKernel } from './kernel/wasm.js';
+import { AssetProvider, BuildResult, GeometrySession } from './kernel/evaluate.js';
+import { ManifoldAPI, WasmOptions, kernelIfReady, loadKernel } from './kernel/wasm.js';
 import { ParseResult, parse } from './parser.js';
 import { EvaluateOptions, evaluate } from './interpreter.js';
 import { SceneNode, countNodes } from './scene.js';
 import { Value } from './values.js';
 
-export interface CompileOptions extends Omit<EvaluateOptions, 'includes'> {
+export interface CompileOptions extends Omit<EvaluateOptions, 'includes' | 'measurer'> {
+  /**
+   * The session `get_size()` builds and measures in.
+   *
+   * Pass the one the render will build in, so what was measured is reused.
+   * Without one, a session is made for this compile if the kernel is loaded,
+   * and measurements are undef if it is not.
+   */
+  session?: GeometrySession;
   /** Logical name for the root file; appears in diagnostics. */
   file?: string;
   /**
@@ -54,6 +62,8 @@ export interface CompileResult {
    * Empty when the file parses; `diagnostics` still says what was wrong.
    */
   omittedLines: number[];
+  /** What each `get_size()` / `get_position()` measured; see `EvaluateResult`. */
+  measurements: Map<string, Value[]>;
   timings: { parseMs: number; evaluateMs: number };
 }
 
@@ -106,25 +116,54 @@ export async function compile(source: string, options: CompileOptions = {}): Pro
   const includes = await resolveIncludes(usable, options, file);
   const parseMs = now() - parseStart;
 
-  const evaluateStart = now();
-  const evaluated = evaluate(usable.file, { ...options, includes: includes.files });
-  const evaluateMs = now() - evaluateStart;
-
-  // The errors are the file's, as written: the parse of what was left over
-  // would only say that the lines it never saw are fine.
-  const diagnostics = [...parsed.diagnostics, ...includes.diagnostics, ...evaluated.diagnostics.items];
-
-  return {
-    parsed,
-    scene: evaluated.root,
-    diagnostics,
-    customizer: buildCustomizerModel(usable),
-    variables: evaluated.topLevelVars,
-    includes: includes.files,
-    omittedLines,
-    timings: { parseMs, evaluateMs },
+  const api = options.session ? undefined : kernelIfReady();
+  const session = options.session ?? (api ? new GeometrySession({ api }) : undefined);
+  const measurer = session && {
+    unloaded: (object: SceneNode) => session.unloadedAssets(object),
+    measure: (object: SceneNode) => session.measure(object),
   };
+
+  try {
+    const evaluateStart = now();
+    let evaluated = evaluate(usable.file, { ...options, includes: includes.files, measurer });
+    // A measured object that imports a file has to wait for it to be read, and
+    // reading is asynchronous, so the run that found it is thrown away and the
+    // file read before the next. Each pass reads what the last one found, and
+    // an import chosen by a measurement can only nest so deep.
+    for (let pass = 0; session && pass < MAX_ASSET_PASSES && evaluated.unloadedAssets.size > 0; pass++) {
+      await session.loadAssets();
+      evaluated = evaluate(usable.file, { ...options, includes: includes.files, measurer });
+    }
+    const evaluateMs = now() - evaluateStart;
+
+    // The errors are the file's, as written: the parse of what was left over
+    // would only say that the lines it never saw are fine.
+    const diagnostics = [
+      ...parsed.diagnostics,
+      ...includes.diagnostics,
+      ...evaluated.diagnostics.items,
+      ...(session?.drainDiagnostics() ?? []),
+    ];
+
+    return {
+      parsed,
+      scene: evaluated.root,
+      diagnostics,
+      customizer: buildCustomizerModel(usable),
+      variables: evaluated.topLevelVars,
+      includes: includes.files,
+      omittedLines,
+      measurements: evaluated.measurements,
+      timings: { parseMs, evaluateMs },
+    };
+  } finally {
+    // Only a session made here is this compile's to free.
+    if (session && session !== options.session) session.dispose();
+  }
 }
+
+/** Rounds of reading files a measured object imports; see `compile`. */
+const MAX_ASSET_PASSES = 4;
 
 /** Enough passes for a handful of broken lines; each pass removes at least one. */
 const MAX_OMIT_PASSES = 16;
@@ -253,9 +292,42 @@ export class Engine {
     return new Engine(api, options.fonts ?? new FontRegistry());
   }
 
-  /** Compiles and meshes in one step. */
+  /**
+   * Compiles without meshing, measuring `get_size()` with this engine's kernel.
+   *
+   * What the legacy export runs to find the value each measurement stands for.
+   */
+  async compile(source: string, options: CompileOptions & { assets?: AssetProvider } = {}): Promise<CompileResult> {
+    const session = new GeometrySession({ api: this.api, fonts: this.fonts, assets: options.assets });
+    try {
+      return await compile(source, { ...options, session });
+    } finally {
+      session.dispose();
+    }
+  }
+
+  /**
+   * Compiles and meshes in one step.
+   *
+   * Both halves share one geometry session, so an object measured by
+   * `get_size()` and then drawn is built once, and so is every part the scene
+   * uses more than once.
+   */
   async render(source: string, options: RenderOptions = {}): Promise<RenderResult> {
-    const compiled = await compile(source, options);
+    const session = new GeometrySession({ api: this.api, fonts: this.fonts, assets: options.assets });
+    try {
+      return await this.renderIn(session, source, options);
+    } finally {
+      session.dispose();
+    }
+  }
+
+  private async renderIn(
+    session: GeometrySession,
+    source: string,
+    options: RenderOptions,
+  ): Promise<RenderResult> {
+    const compiled = await compile(source, { ...options, session });
 
     const skipOnError = options.skipGeometryOnError ?? true;
     // A partial render forgives the root file's parse errors, and nothing
@@ -276,13 +348,8 @@ export class Engine {
       };
     }
 
-    const bag = new DiagnosticBag();
     const geometryStart = now();
-    const geometry = await buildGeometry(compiled.scene, {
-      api: this.api,
-      diagnostics: bag,
-      fonts: this.fonts,
-      assets: options.assets,
+    const geometry = await session.build(compiled.scene, {
       merge: options.merge ?? options.preview !== true,
       varyColors: options.varyColors,
     });
@@ -290,7 +357,7 @@ export class Engine {
 
     return {
       ...compiled,
-      diagnostics: [...compiled.diagnostics, ...bag.items],
+      diagnostics: [...compiled.diagnostics, ...session.drainDiagnostics()],
       geometry: { ...geometry, stats: { ...geometry.stats, nodes: countNodes(compiled.scene) } },
       timings: { ...compiled.timings, geometryMs },
     };
@@ -321,6 +388,7 @@ export * from './transpile.js';
 export * from './values.js';
 export { BUILTIN_FUNCTIONS } from './builtins.js';
 export { BUILTIN_CONSTANTS, BUILTIN_MODULES, evaluate } from './interpreter.js';
+export type { Measurer } from './interpreter.js';
 export { MODIFIER_ROLES, parse } from './parser.js';
 export type { ParseResult } from './parser.js';
 export { lex } from './lexer.js';
@@ -334,12 +402,12 @@ export { createZip, crc32 } from './io/export/zip.js';
 export type { ZipEntry } from './io/export/zip.js';
 export { readZip, safePath, ZipError } from './io/import/zip.js';
 export type { ZipFile } from './io/import/zip.js';
-export { buildGeometry } from './kernel/evaluate.js';
-export type { AssetProvider, BuildOptions, BuildResult } from './kernel/evaluate.js';
+export { GeometrySession, buildGeometry } from './kernel/evaluate.js';
+export type { AssetProvider, BuildOptions, BuildResult, SessionOptions } from './kernel/evaluate.js';
 export { loadKernel, kernelIfReady } from './kernel/wasm.js';
 export type { ManifoldAPI, WasmOptions } from './kernel/wasm.js';
 export { manifoldToMesh, meshToManifold } from './kernel/primitives.js';
 export type { Assembly, Piece, RGBA } from './kernel/geometry.js';
 
 /** Engine version, reported by `betterscad --version` and the about panel. */
-export const ENGINE_VERSION = '0.15.0';
+export const ENGINE_VERSION = '0.16.0';

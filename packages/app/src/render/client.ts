@@ -167,9 +167,16 @@ export class RenderClient {
     this.worker.postMessage({ type: 'set-files', files } satisfies SetFilesRequest);
   }
 
-  /** Rewrites to stock `.scad` in the worker, where the fonts are. */
-  transpile(source: string, file: string): Promise<TranspileResponse> {
-    return this.send<TranspileResponse>({ type: 'transpile', id: this.nextId++, source, file });
+  /**
+   * Rewrites to stock `.scad` in the worker, where the fonts and the kernel
+   * are: glyph widths and `get_size()` are both measured there.
+   */
+  transpile(
+    source: string,
+    file: string,
+    context: { files: Record<string, string>; parameters: Record<string, Value>; time: number },
+  ): Promise<TranspileResponse> {
+    return this.send<TranspileResponse>({ type: 'transpile', id: this.nextId++, source, file, ...context });
   }
 
   exportModel(

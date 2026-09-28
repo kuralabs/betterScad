@@ -13,6 +13,7 @@ import {
   Expr,
   ForClause,
   ListElement,
+  MEASURE_FUNCTIONS,
   Parameter,
   ScadFile,
   Statement,
@@ -68,6 +69,12 @@ const BINARY_PRECEDENCE: Record<string, number> = {
 
 class Parser {
   private pos = 0;
+  /**
+   * True while parsing the object inside `get_size(…)`, where the closing `)`
+   * ends the statement the way a `;` would. Off again inside braces, where
+   * statements end the ordinary way.
+   */
+  private inMeasure = false;
   readonly diagnostics: Diagnostic[] = [];
   readonly brokenLines = new Set<number>();
 
@@ -299,12 +306,23 @@ class Parser {
    */
   private parseChildStatement(): Statement | undefined {
     if (this.eat(T.Punct, ';')) return undefined;
+    if (this.inMeasure && this.atPunct(')')) return undefined;
     const stmt = this.parseStatement();
     return stmt && stmt.kind === 'empty' ? undefined : stmt;
   }
 
   private parseBlockBody(): Statement[] {
     this.expect(T.Punct, '{');
+    const inMeasure = this.inMeasure;
+    this.inMeasure = false;
+    try {
+      return this.parseBlockStatements();
+    } finally {
+      this.inMeasure = inMeasure;
+    }
+  }
+
+  private parseBlockStatements(): Statement[] {
     const body: Statement[] = [];
     while (!this.atPunct('}') && this.current.kind !== T.EOF) {
       const before = this.pos;
@@ -641,6 +659,9 @@ class Parser {
       if (tok.text === 'echo' && this.peek(1).kind === T.Punct && this.peek(1).text === '(') {
         return this.parseAssertOrEchoExpr('echo');
       }
+      if (Object.hasOwn(MEASURE_FUNCTIONS, tok.text) && this.measuresAnObject()) {
+        return this.parseMeasure();
+      }
       this.next();
       return { kind: 'identifier', name: tok.text, span: tok.span };
     }
@@ -656,6 +677,51 @@ class Parser {
 
     this.error(`Expected an expression but found \`${tok.text}\`.`, tok.span, 'parse.expected-expression');
     throw new ParseAbort();
+  }
+
+  /**
+   * Whether `get_size(` is followed by an object rather than a value.
+   *
+   * An object starts the way a statement does: a module call (`name(`),
+   * possibly behind modifiers, a block, or a `for`/`if`. Anything else — a
+   * number, a variable — is an ordinary call, and the interpreter says what
+   * `get_size()` wanted instead.
+   */
+  private measuresAnObject(): boolean {
+    if (!(this.peek(1).kind === T.Punct && this.peek(1).text === '(')) return false;
+    let at = 2;
+    while (this.peek(at).kind === T.Punct && this.peek(at).text in MODIFIER_ROLES) at++;
+    const first = this.peek(at);
+    if (first.kind === T.Punct) return first.text === '{';
+    if (first.kind === T.Keyword) return ['for', 'intersection_for', 'if'].includes(first.text);
+    return (
+      first.kind === T.Identifier &&
+      this.peek(at + 1).kind === T.Punct &&
+      this.peek(at + 1).text === '('
+    );
+  }
+
+  private parseMeasure(): Expr {
+    const nameTok = this.next();
+    this.expect(T.Punct, '(');
+    const inMeasure = this.inMeasure;
+    this.inMeasure = true;
+    let body: Statement | undefined;
+    try {
+      body = this.parseStatement();
+    } finally {
+      this.inMeasure = inMeasure;
+    }
+    // `get_size(cube(10);)` is forgiven: it is what a statement looks like.
+    this.eat(T.Punct, ';');
+    const close = this.expect(T.Punct, ')');
+    return {
+      kind: 'measure',
+      measure: MEASURE_FUNCTIONS[nameTok.text],
+      body: body ?? { kind: 'empty', span: close.span },
+      nameSpan: nameTok.span,
+      span: mergeSpans(nameTok.span, close.span)!,
+    };
   }
 
   private parseLetExpr(): Expr {

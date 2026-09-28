@@ -745,7 +745,8 @@ export const OTHER: ReferenceGroup = {
           'that a module can behave differently depending on who called it, which is a thing ' +
           'worth being able to do and not a thing worth relying on.',
         '`textmetrics(…)` — the measured size of a string. It is in OpenSCAD’s development ' +
-          'snapshots, not in the 2021.01 release BetterSCAD implements.',
+          'snapshots, not in the 2021.01 release BetterSCAD implements. `get_size(text(…))` ' +
+          'measures the same thing, and measures any other object too.',
         'Third-party libraries (BOSL2, MCAD) are also untested and unsupported. They lean on deep ' +
           'recursion and large list comprehensions; they may well work, and they are not ' +
           'promised to.',
@@ -760,7 +761,7 @@ export const OTHER: ReferenceGroup = {
           caption: 'Also reports `parent_module() is not a known function` as a warning.',
         },
       ],
-      see: ['surface', 'version'],
+      see: ['surface', 'version', 'get_size'],
       keywords: ['parent_module', 'textmetrics', 'missing', 'unsupported', 'bosl2', 'mcad'],
     },
     {

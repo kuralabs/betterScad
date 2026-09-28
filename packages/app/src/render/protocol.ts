@@ -77,6 +77,14 @@ export interface TranspileRequest {
   source: string;
   /** Logical name, for diagnostics. */
   file: string;
+  /**
+   * What a render of the document would be given. `get_size()` is written as
+   * the value it measures, so the export has to compile the model exactly as
+   * it stands: same parameters, same includes, same `$t`.
+   */
+  files: Record<string, string>;
+  parameters: Record<string, Value>;
+  time: number;
 }
 
 export interface CancelRequest {

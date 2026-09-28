@@ -17,15 +17,19 @@ import {
   Expr,
   ForClause,
   ListElement,
+  MEASURE_FUNCTIONS,
+  MeasureExpr,
   Parameter,
   ScadFile,
   Statement,
+  measureKey,
 } from './ast.js';
 import { Diagnostic } from './diagnostics.js';
 import { EASE_SLICES } from './scene.js';
 import { FontRegistry } from './fonts.js';
 import { MODIFIER_ROLES, parse } from './parser.js';
 import { getRole } from './roles.js';
+import { Value } from './values.js';
 
 /**
  * Stamped into every generated file.
@@ -50,6 +54,19 @@ export interface TranspileOptions {
    * all, and the export says so rather than emitting text in the wrong places.
    */
   fonts?: FontRegistry;
+  /**
+   * What each `get_size()` / `get_position()` measured, from a compile of the
+   * same source (`CompileResult.measurements`).
+   *
+   * OpenSCAD has no way to measure an object, so each call is written as the
+   * value it measured. Without these the export cannot be done, and says so.
+   */
+  measurements?: Map<string, Value[]>;
+  /**
+   * The source text the file was parsed from, so a written measurement can
+   * say in a comment which call it stands for.
+   */
+  source?: string;
 }
 
 export interface TranspileResult {
@@ -61,6 +78,13 @@ export interface TranspileResult {
    * makes `source` unusable. The caller refuses rather than writing it.
    */
   unmeasurable: boolean;
+  /** Set when `get_size()` is used and no `measurements` were given. */
+  unmeasured: boolean;
+  /**
+   * Measurements that came out different on different runs, by line. No one
+   * number can stand in for them, so `source` is unusable.
+   */
+  varying: { name: string; line: number; values: number }[];
 }
 
 /**
@@ -499,12 +523,21 @@ class Printer {
 
   /** Set when a rewrite needed font metrics that were not supplied. */
   unmeasurable = false;
+  /** See `TranspileResult.unmeasured` and `.varying`. */
+  unmeasured = false;
+  readonly varying: TranspileResult['varying'] = [];
 
   constructor(
     private readonly indentWidth: number,
     /** Module names already taken by the file, so a helper cannot shadow one. */
     private readonly taken: Set<string>,
     private readonly fonts?: FontRegistry,
+    private readonly measured: {
+      values?: Map<string, Value[]>;
+      source?: string;
+      /** Function names the file defines, which its own calls still mean. */
+      ownFunctions: Set<string>;
+    } = { ownFunctions: new Set() },
   ) {}
 
   /**
@@ -1033,7 +1066,53 @@ class Printer {
         return `echo(${this.args(expr.args)})${expr.body ? ` ${this.expr(expr.body)}` : ''}`;
       case 'lambda':
         return `function (${this.params(expr.params)}) ${this.expr(expr.body)}`;
+      case 'measure':
+        return this.measurement(expr);
     }
+  }
+
+  /**
+   * `get_size(…)` and `get_position(…)`, written as what they measured.
+   *
+   * The call is kept in a comment in front of the value, so the file still
+   * says what the number is. Only the number is fixed: everything around it —
+   * the arithmetic on it, the transform it feeds — stays as written.
+   */
+  private measurement(expr: MeasureExpr): string {
+    const name = expr.measure === 'size' ? 'get_size' : 'get_position';
+    // A file with a `get_size()` of its own was calling it all along.
+    if (this.measured.ownFunctions.has(name) && expr.body.kind === 'module-call') {
+      const call = expr.body;
+      if (call.children.length === 0 && call.roles.length === 0) {
+        return `${name}(${call.name}(${this.args(call.args)}))`;
+      }
+    }
+
+    this.rewrites.add('get_size() and get_position() written as the values they measured');
+    const { values, source } = this.measured;
+    if (!values) {
+      this.unmeasured = true;
+      return 'undef';
+    }
+
+    const found = values.get(measureKey(expr.span));
+    const written = source
+      ?.slice(expr.span.start.offset, expr.span.end.offset)
+      .replace(/\s+/g, ' ')
+      .trim();
+    // A `*/` in the call would end the comment early; the number alone is fine.
+    const label = written && !written.includes('*/') ? written : undefined;
+
+    if (!found) {
+      // Never ran, so nothing here depends on it at these parameters.
+      return label ? `/* ${label}: not reached */ undef` : 'undef';
+    }
+    if (found.length > 1) {
+      this.varying.push({ name, line: expr.span.start.line, values: found.length });
+      return 'undef';
+    }
+    const literal = valueLiteral(found[0]);
+    return label ? `/* ${label} */ ${literal}` : literal;
   }
 
   private listElement(element: ListElement): string {
@@ -1197,13 +1276,23 @@ function formatNumberLiteral(n: number): string {
  * what changed.
  */
 export function transpileToLegacyScad(file: ScadFile, options: TranspileOptions = {}): TranspileResult {
-  const printer = new Printer(options.indent ?? 2, declaredModuleNames(file), options.fonts);
+  const printer = new Printer(options.indent ?? 2, declaredModuleNames(file), options.fonts, {
+    values: options.measurements,
+    source: options.source,
+    ownFunctions: declaredFunctionNames(file),
+  });
   printer.printBody(file.body, 0);
   // Printed first, because printing is what discovers which helpers are needed.
   const body = printer.helperDefinitions() + printer.toString();
   const rewrites = [...printer.rewrites];
+  const outcome = {
+    rewrites,
+    unmeasurable: printer.unmeasurable,
+    unmeasured: printer.unmeasured,
+    varying: printer.varying,
+  };
 
-  if (options.header === false) return { source: body, rewrites, unmeasurable: printer.unmeasurable };
+  if (options.header === false) return { source: body, ...outcome };
 
   const header = [
     '// Generated by BetterSCAD — legacy OpenSCAD export.',
@@ -1215,7 +1304,61 @@ export function transpileToLegacyScad(file: ScadFile, options: TranspileOptions 
     '',
   ].join('\n');
 
-  return { source: header + body, rewrites, unmeasurable: printer.unmeasurable };
+  return { source: header + body, ...outcome };
+}
+
+/** A value as `.scad` source: what a measurement is written as. */
+function valueLiteral(value: Value): string {
+  if (typeof value === 'number') return formatNumberLiteral(value);
+  if (Array.isArray(value)) return `[${value.map(valueLiteral).join(', ')}]`;
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return 'undef';
+}
+
+/**
+ * Every AST node below `root` of one kind, at any depth, expressions included.
+ *
+ * Walks the objects themselves rather than the grammar, because a measurement
+ * can sit anywhere an expression can — an argument, a default, an index, a
+ * list comprehension — and a hand-written walk over every one of those is a
+ * walk that misses the one added next.
+ */
+function nodesOfKind<K extends string>(root: unknown, kind: K): Extract<Expr | Statement, { kind: K }>[] {
+  const found: Extract<Expr | Statement, { kind: K }>[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    if ((value as { kind?: unknown }).kind === kind) {
+      found.push(value as Extract<Expr | Statement, { kind: K }>);
+    }
+    for (const [key, inner] of Object.entries(value)) {
+      if (key !== 'span' && key !== 'nameSpan') visit(inner);
+    }
+  };
+  visit(root);
+  return found;
+}
+
+/**
+ * Whether saving `file` as OpenSCAD needs its measurements, and so a render.
+ *
+ * Asked first so a caller without geometry at hand — the CLI, the worker's
+ * export — only pays for a compile when there is something to measure.
+ */
+export function usesMeasurements(file: ScadFile): boolean {
+  const own = declaredFunctionNames(file);
+  return nodesOfKind(file.body, 'measure').some(
+    (m) => !own.has(m.measure === 'size' ? 'get_size' : 'get_position'),
+  );
+}
+
+/** Every function name the file declares, at any depth. */
+function declaredFunctionNames(file: ScadFile): Set<string> {
+  return new Set(nodesOfKind(file.body, 'function-decl').map((decl) => decl.name));
 }
 
 /**
@@ -1346,6 +1489,22 @@ export function describeExtensions(file: ScadFile): ExtensionUse[] {
   };
 
   for (const stmt of file.body) visitStatement(stmt);
+
+  // Expressions, which the walk above does not enter. A file with its own
+  // function of the same name is calling that, and nothing needs rewriting.
+  const own = declaredFunctionNames(file);
+  for (const measure of nodesOfKind(file.body, 'measure')) {
+    const name = Object.keys(MEASURE_FUNCTIONS).find((n) => MEASURE_FUNCTIONS[n] === measure.measure)!;
+    if (own.has(name)) continue;
+    record(
+      name,
+      `${name}()`,
+      'Written as the value it measures when the file is saved. It stays fixed: change a ' +
+        'parameter in OpenSCAD and it will not follow.',
+      measure.span.start.line,
+    );
+  }
+
   for (const use of found.values()) use.lines.sort((a, b) => a - b);
   return [...found.values()];
 }
@@ -1392,7 +1551,41 @@ export function toStockScad(
     return { source, extensions, rewrites: [], verbatim: true, errors: [] };
   }
 
-  const { source: rewritten, rewrites, unmeasurable } = transpileToLegacyScad(parsed.file, options);
+  const { source: rewritten, rewrites, unmeasurable, unmeasured, varying } = transpileToLegacyScad(
+    parsed.file,
+    { ...options, source },
+  );
+
+  // A measurement is a value only a render can supply, and one that measures
+  // something different each time it runs has no single value to supply.
+  // Either way, writing anything would be writing the wrong model.
+  if (unmeasured || varying.length > 0) {
+    const [first] = varying;
+    return {
+      source,
+      extensions,
+      rewrites: [],
+      verbatim: true,
+      errors: [
+        unmeasured
+          ? {
+              severity: 'error',
+              message:
+                'Saving get_size() or get_position() as OpenSCAD needs the model rendered, so ' +
+                'the sizes can be measured.',
+              code: 'transpile.measure-unmeasured',
+            }
+          : {
+              severity: 'error',
+              message:
+                `${first.name}() on line ${first.line} comes out ${first.values} different ways ` +
+                'as the code runs, so no single value can stand in for it in OpenSCAD. ' +
+                'Measure outside the module or loop, and pass the value in.',
+              code: 'transpile.measure-varies',
+            },
+      ],
+    };
+  }
 
   // `text(radius = …)` is the one rewrite that cannot be done from the source
   // alone: it needs the font's glyph widths, because OpenSCAD has no way to
