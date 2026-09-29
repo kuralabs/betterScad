@@ -202,16 +202,14 @@ export class Toolbar {
       title: 'Re-render with $preview = true',
       onClick: () => actions.preview(),
     });
-    // Render carries the accent, not Preview: it is the one that produces the
-    // geometry Export writes, and it is the end of the loop rather than a step
-    // in it. Preview is also the button that hides itself under auto-render,
-    // which is no place for the only primary action in the toolbar.
+    // Shown when there is a reason to press it (see `update`), and never with
+    // the accent: it is one control among several, not the thing to do next.
+    // F6 works whether it is shown or not.
     this.renderButton = button({
       label: 'Render',
       iconName: 'render',
       shortcut: 'F6',
-      variant: 'primary',
-      title: 'Re-render with $preview = false — the geometry Export produces',
+      title: 'Render with $preview = false — the geometry Export produces',
       onClick: () => actions.render(),
     });
 
@@ -345,7 +343,8 @@ export class Toolbar {
     consoleVisible: boolean;
     filesVisible: boolean;
     settings: AppSettings;
-    showingFinalRender: boolean;
+    /** The last render failed for a technical reason; see `update`. */
+    renderBroke: boolean;
     documentFormat: DocumentFormat;
     /** Drives the Save menu's zip item; see `saveMenuItems`. */
     usesProjectFiles: boolean;
@@ -368,13 +367,15 @@ export class Toolbar {
     // button should not remove its shortcut.
     this.previewButton.hidden = state.settings.autoRender;
 
-    // Render is not redundant: it is the only way to see $preview = false,
-    // which is what Export produces. Marking it active when that is what is on
-    // screen is the difference between a useful button and a mystery one.
-    this.renderButton.classList.toggle('btn--active', state.showingFinalRender);
-    this.renderButton.title = state.showingFinalRender
-      ? 'Showing the final render ($preview = false)'
-      : 'Re-render with $preview = false — the geometry Export produces';
+    // With auto-render off, this is how a render happens, so it is always
+    // there. With it on, every edit renders anyway, and the button earns its
+    // place only after a render broke, as the way to try again. A render that
+    // failed because the code is wrong is not that: the next edit fixes it.
+    // F6 and the palette still render at any time.
+    this.renderButton.hidden = state.settings.autoRender && !state.renderBroke;
+    this.renderButton.title = state.renderBroke
+      ? 'The last render failed. Render again with $preview = false'
+      : 'Render with $preview = false — the geometry Export produces';
 
     this.settingsButton.setSettings(state.settings);
   }

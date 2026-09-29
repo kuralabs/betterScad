@@ -97,6 +97,15 @@ import { showWelcome } from './ui/welcome.js';
 import { Viewport } from './viewport/viewport.js';
 import type { CameraState } from './viewport/controls.js';
 
+/**
+ * Errors that mean the geometry kernel threw, not that the code is wrong.
+ *
+ * A half-typed line or a failed `assert()` is the source's problem and the
+ * next edit fixes it; these are the failures where running the same code
+ * again is a reasonable thing to try.
+ */
+const KERNEL_FAILURES = new Set(['kernel.build-failed', 'kernel.operation-failed']);
+
 class App {
   private readonly workspace = new Workspace();
   /**
@@ -139,6 +148,12 @@ class App {
   private lastDimension: 2 | 3 | 0 = 0;
   /** Whether what is on screen came from a full render rather than a preview. */
   private showingFinalRender = false;
+  /**
+   * The last render broke rather than reported: the worker failed, or the
+   * geometry kernel threw. Under auto-render, only then is there a Render
+   * button.
+   */
+  private renderBroke = false;
   /**
    * Documents still waiting for their opening view.
    *
@@ -573,6 +588,7 @@ class App {
         varyColors: this.workspace.layout.varyColors,
       });
     } catch (err) {
+      this.renderBroke = true;
       this.reportError(err instanceof Error ? err.message : String(err));
     } finally {
       this.setBusy(false);
@@ -580,6 +596,9 @@ class App {
   }
 
   private onRenderResult(result: RenderResponse): void {
+    this.renderBroke = result.diagnostics.some(
+      (d) => d.severity === 'error' && d.code !== undefined && KERNEL_FAILURES.has(d.code),
+    );
     this.lastStats = result.stats;
     this.lastDimension = result.dimension;
     this.showingFinalRender = !result.preview;
@@ -1764,7 +1783,7 @@ class App {
     this.toolbar.update({
       ...this.workspace.layout,
       settings: this.workspace.layout,
-      showingFinalRender: this.showingFinalRender,
+      renderBroke: this.renderBroke,
       documentFormat: active ? this.workspace.formatOf(active) : 'bscad',
       usesProjectFiles: this.dependencies.length > 0,
       hasDocument: !!active,
