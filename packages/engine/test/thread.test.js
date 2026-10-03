@@ -151,6 +151,7 @@ test('the legacy export is the same solid', async () => {
     `${M8}thread(d = 8, pitch = 1.25, h = 10, center = true, chamfer = false);`,
     `${M8}thread(d = 12, pitch = 1.75, h = 8, angle = 29, segments = 30);`,
     '$fa = 6; $fs = 0.4;\nthread(d = 6, pitch = 1, h = 6);',
+    `$fn = 48;\nthread(d = 4, pitch = 0.7, h = 5, internal = true);`,
     `${M8}thread(d = d, pitch = p, h = h, chamfer2 = false);`,
     `${M8}thread(d = d, pitch = p, h = h, internal = true, chamfer1 = false);`,
     `${M8}thread(d = d, pitch = p, h = h, chamfer = false, chamfer2 = true);`,
@@ -211,6 +212,23 @@ test('chamfer1 and chamfer2 shape one end each, overriding chamfer', async () =>
     if (Math.abs(points[i + 2] - 10) < 1e-9) high = Math.max(high, r);
   }
   assert.ok(low < high, `bottom face reaches ${low}, top ${high}`);
+});
+
+test('the default clearance follows the pitch, and every common size builds', async () => {
+  // Coarse threads get the full FDM fit, fine ones the most their groove takes.
+  const cut = (pitch, extra = '') =>
+    volume(`$fn = 48;\nthread(d = 8, pitch = ${pitch}, h = 10, internal = true${extra});`);
+  for (const [pitch, fit] of [[1.25, 0.4], [1.5, 0.4], [1, 0.32], [0.7, 0.224]]) {
+    const unset = await cut(pitch);
+    const given = await cut(pitch, `, clearance = ${fit}`);
+    assert.ok(Math.abs(unset - given) < 1e-9, `pitch ${pitch}: default ${unset} vs ${fit} ${given}`);
+  }
+
+  // A fixed default would make every one of these an error.
+  for (const [d, pitch] of [[3, 0.5], [4, 0.7], [5, 0.8], [6, 1]]) {
+    const { errors } = await render(`thread(d = ${d}, pitch = ${pitch}, h = 5, internal = true);`);
+    assert.deepEqual(errors, [], `M${d} x ${pitch}`);
+  }
 });
 
 test('center puts the thread on the origin, as cylinder does', async () => {

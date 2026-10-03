@@ -2355,7 +2355,13 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
       'center',
       'segments',
     ],
-    defaults: { internal: 'false', clearance: '0.2', angle: '60', chamfer: 'true', center: 'false' },
+    defaults: {
+      internal: 'false',
+      clearance: 'min(0.4, 0.32 * pitch)',
+      angle: '60',
+      chamfer: 'true',
+      center: 'false',
+    },
     build: (args, _children, scope, interp, span) => {
       const d = asNumber(args.get('d'), 0);
       const pitch = asNumber(args.get('pitch'), 0);
@@ -2374,8 +2380,12 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
       }
 
       const internal = isTruthy(args.get('internal'));
+      // Loose enough for an FDM print, capped where a fine pitch runs out of
+      // groove: past about 0.38 × pitch the turns of the cut solid overlap.
+      // So M8 and up get 0.4, and finer threads the most they can take.
+      const fit = Math.min(0.4, 0.32 * pitch);
       const clearance =
-        args.get('clearance') === undefined ? 0.2 : asNumber(args.get('clearance'), 0.2);
+        args.get('clearance') === undefined ? fit : asNumber(args.get('clearance'), fit);
       // `chamfer` sets both ends and `chamfer1` / `chamfer2` override the bottom
       // and the top, numbered as they are on `cylinder`.
       const chamfer = args.get('chamfer') === undefined ? true : isTruthy(args.get('chamfer'));

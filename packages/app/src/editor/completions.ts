@@ -271,7 +271,7 @@ const MODULES: BuiltinDoc[] = [
     label: 'thread',
     template: 'thread(d = ${1:8}, pitch = ${2:1.25}, h = ${3:10})',
     detail: 'thread(d, pitch, h)  — BetterSCAD',
-    info: 'A helical screw thread. `d` is the outside diameter and `pitch` the rise per turn (M8 is d = 8, pitch = 1.25).\n\n`internal = true` makes the mating hole: put it under negative(), and the bolt from the same d and pitch screws into it. `clearance` (default 0.2) is the fit.\n\nExports to `.scad` as a generated module building the same swept helix.',
+    info: 'A helical screw thread. `d` is the outside diameter and `pitch` the rise per turn (M8 is d = 8, pitch = 1.25).\n\n`internal = true` makes the mating hole: put it under negative(), and the bolt from the same d and pitch screws into it. `clearance` is the fit; by default it follows the pitch — min(0.4, 0.32 × pitch), so 0.4 for M8 and up, less on finer threads.\n\nExports to `.scad` as a generated module building the same swept helix.',
     type: 'class',
     forms: [
       {

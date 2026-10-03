@@ -470,11 +470,18 @@ union() {
 ```
 
 The bolt above screws into that. The two are the same construction with one
-number changed — `clearance` (default `0.2`) grows the internal thread and
+number changed — `clearance` grows the internal thread and
 nothing else, so a bolt always measures the `d` you asked for. The clearance is
 uniform rather than merely radial: the female groove is wider across the flanks
 as well as deeper, which is what actually lets the pair turn. Setting it to `0`
 gives a geometrically exact pair, which will not assemble in any real material.
+
+Left out, `clearance` follows the pitch: `min(0.4, 0.32 × pitch)`. That is `0.4`
+for M8 and coarser — the loose fit an FDM print needs — and `0.32` for M6,
+`0.26` for M5, `0.22` for M4 and `0.16` for M3. It shrinks on fine threads
+because it has to: past about `0.38 × pitch` the turns of the groove run into
+each other and close it up, so a fixed default would make every small thread an
+error. Set it yourself to tune for your printer.
 
 `chamfer` (default `true`) shapes the ends, in opposite directions for the two
 kinds. An external thread tapers in, so its first turn runs out instead of

@@ -353,7 +353,7 @@ const SHAPE_MODULES: Record<string, { params: string; body: string[] }> = {
   },
   thread: {
     params:
-      'd, pitch, h, internal = false, clearance = 0.2, angle = 60, chamfer = true, ' +
+      'd, pitch, h, internal = false, clearance = undef, angle = 60, chamfer = true, ' +
       'chamfer1 = undef, chamfer2 = undef, center = false, segments = 0',
     body: [
       '// linear_extrude(twist) turns its profile about Z as it rises, and one',
@@ -365,7 +365,10 @@ const SHAPE_MODULES: Record<string, { params: string; body: string[] }> = {
       '// The one number separating a bolt from the hole it screws into. The',
       '// apex moves twice as far as the radii, which is what makes the',
       '// clearance uniform over the flanks rather than only radial.',
-      'grow = internal ? clearance / 2 : 0;',
+      '// Unset, the fit follows the pitch: 0.4 for M8 and up, less where a fine',
+      '// thread would run out of groove.',
+      'fit = clearance == undef ? min(0.4, 0.32 * pitch) : clearance;',
+      'grow = internal ? fit / 2 : 0;',
       'rmaj = d / 2 + grow;',
       'rmin = d / 2 - 5 * v_height / 8 + grow;',
       'apex = d / 2 + v_height / 8 + 2 * grow;',

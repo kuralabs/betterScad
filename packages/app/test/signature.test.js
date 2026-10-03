@@ -127,7 +127,7 @@ test('a parameter carries the default it falls back to', () => {
     pitch: undefined,
     h: undefined,
     internal: 'false',
-    clearance: '0.2',
+    clearance: 'min(0.4, 0.32 * pitch)',
     angle: '60',
     chamfer: 'true',
     chamfer1: undefined,

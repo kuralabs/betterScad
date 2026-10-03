@@ -358,10 +358,17 @@ export const NEW_SHAPES: ReferenceGroup = {
         '`internal = true` is the whole mating story. It builds the **solid to subtract**, not ' +
           'the nut: put it under `negative()` or in a `difference()` and what is left is a hole ' +
           'the matching bolt turns into.',
-        '`clearance` (default `0.2`) is the gap between the pair, and only the internal thread ' +
-          'grows by it — a bolt always measures the `d` you asked for. Raise it for a looser ' +
-          'fit or a printer that runs wide; `0` gives a geometrically exact pair, which will ' +
-          'not assemble in any real material.',
+        '`clearance` is the gap between the pair, and only the internal thread grows by it — ' +
+          'a bolt always measures the `d` you asked for. `0` gives a geometrically exact pair, ' +
+          'which will not assemble in any real material.',
+        'Left out, `clearance` follows the pitch: **`min(0.4, 0.32 × pitch)`**. That is `0.4` ' +
+          'for M8 (pitch 1.25) and coarser — the loose fit an FDM print needs — and less on ' +
+          'finer threads: `0.32` for M6, `0.26` for M5, `0.22` for M4 and `0.16` for M3.',
+        'It shrinks on fine threads because it has to. The clearance widens the groove along ' +
+          'the flanks as well as deepening it, and once it passes about `0.38 × pitch` the ' +
+          'turns run into each other and the groove closes up. A fixed default would make ' +
+          'every small thread an error. Set it yourself to tune for your printer — raise it if ' +
+          'the pair binds, lower it if a resin print rattles.',
         'The clearance is uniform, not merely radial: the female groove is wider across the ' +
           'flanks as well as deeper, which is what actually lets the two turn against each other.',
         'Both are the same construction with one number changed, so a bolt and its hole cannot ' +
@@ -396,7 +403,9 @@ export const NEW_SHAPES: ReferenceGroup = {
         },
         {
           name: 'clearance',
-          description: 'Fit between the pair, applied to the internal thread only. Default `0.2`.',
+          description:
+            'Fit between the pair, applied to the internal thread only. Default ' +
+            '`min(0.4, 0.32 × pitch)`.',
         },
         { name: 'angle', description: 'Included angle of the tooth. Default `60`.' },
         {
