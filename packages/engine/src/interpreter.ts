@@ -1697,24 +1697,25 @@ function threadProfilePoints(
 function threadTrimProfile(
   rmaj: number,
   h: number,
-  cut: number,
+  cut1: number,
+  cut2: number,
   internal: boolean,
 ): [number, number][] {
-  if (cut <= 0) {
-    return [
-      [0, 0],
-      [rmaj, 0],
-      [rmaj, h],
-      [0, h],
-    ];
-  }
-  const mouth = internal ? rmaj + cut : rmaj - cut;
+  const mouth = (cut: number): number => (internal ? rmaj + cut : rmaj - cut);
   return [
     [0, 0],
-    [mouth, 0],
-    [rmaj, cut],
-    [rmaj, h - cut],
-    [mouth, h],
+    ...(cut1 > 0
+      ? ([
+          [mouth(cut1), 0],
+          [rmaj, cut1],
+        ] as [number, number][])
+      : ([[rmaj, 0]] as [number, number][])),
+    ...(cut2 > 0
+      ? ([
+          [rmaj, h - cut2],
+          [mouth(cut2), h],
+        ] as [number, number][])
+      : ([[rmaj, h]] as [number, number][])),
     [0, h],
   ];
 }
@@ -2349,6 +2350,8 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
       'clearance',
       'angle',
       'chamfer',
+      'chamfer1',
+      'chamfer2',
       'center',
       'segments',
     ],
@@ -2373,7 +2376,13 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
       const internal = isTruthy(args.get('internal'));
       const clearance =
         args.get('clearance') === undefined ? 0.2 : asNumber(args.get('clearance'), 0.2);
+      // `chamfer` sets both ends and `chamfer1` / `chamfer2` override the bottom
+      // and the top, numbered as they are on `cylinder`.
       const chamfer = args.get('chamfer') === undefined ? true : isTruthy(args.get('chamfer'));
+      const end = (key: string): boolean =>
+        args.get(key) === undefined ? chamfer : isTruthy(args.get(key));
+      const chamfer1 = end('chamfer1');
+      const chamfer2 = end('chamfer2');
       const center = isTruthy(args.get('center'));
 
       const halfTan = Math.tan(((angle / 2) * Math.PI) / 180);
@@ -2465,9 +2474,12 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
         span,
       );
 
-      // Too short to shape both ends and still have thread between them, and
-      // there is nothing to chamfer.
-      const cut = chamfer && 2 * (rmaj - rmin) < h ? rmaj - rmin : 0;
+      // Too short to shape the ends asked for and still have thread between
+      // them, and there is nothing to chamfer.
+      const depth = rmaj - rmin;
+      const fits = (Number(chamfer1) + Number(chamfer2)) * depth < h;
+      const cut1 = chamfer1 && fits ? depth : 0;
+      const cut2 = chamfer2 && fits ? depth : 0;
       const revolve = (points: [number, number][]): SceneNode =>
         node(
           'rotate_extrude',
@@ -2478,10 +2490,8 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
         );
 
       const parts = [core, ridge];
-      if (internal && cut > 0) {
-        parts.push(revolve(threadMouthProfile(rmaj, h, cut, false)));
-        parts.push(revolve(threadMouthProfile(rmaj, h, cut, true)));
-      }
+      if (internal && cut1 > 0) parts.push(revolve(threadMouthProfile(rmaj, h, cut1, false)));
+      if (internal && cut2 > 0) parts.push(revolve(threadMouthProfile(rmaj, h, cut2, true)));
 
       // One intersection, so this comes back as a single solid: `intersection`
       // unions each operand within itself first, where a bare `union` would
@@ -2489,7 +2499,7 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
       const solid = node(
         'intersection',
         {},
-        [node('union', {}, parts, [], span), revolve(threadTrimProfile(rmaj, h, cut, internal))],
+        [node('union', {}, parts, [], span), revolve(threadTrimProfile(rmaj, h, cut1, cut2, internal))],
         [],
         span,
       );

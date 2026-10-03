@@ -41,7 +41,9 @@ test('the line that prompted this', () => {
 
   const signature = signatureFor('thread', '');
   const left = signature.params.filter((p) => !call.named.includes(p.name)).map((p) => p.name);
-  assert.deepEqual(left, ['clearance', 'angle', 'chamfer', 'center', 'segments', '$fn', '$fa', '$fs']);
+  assert.deepEqual(left, [
+    'clearance', 'angle', 'chamfer', 'chamfer1', 'chamfer2', 'center', 'segments', '$fn', '$fa', '$fs',
+  ]);
 });
 
 test('a partial name is still the start of an argument', () => {
@@ -128,6 +130,8 @@ test('a parameter carries the default it falls back to', () => {
     clearance: '0.2',
     angle: '60',
     chamfer: 'true',
+    chamfer1: undefined,
+    chamfer2: undefined,
     center: 'false',
     segments: undefined,
     $fn: undefined,

@@ -290,6 +290,10 @@ const MODULES: BuiltinDoc[] = [
         template: 'thread(d = ${1:8}, pitch = ${2:1.25}, h = ${3:10}, chamfer = false)',
         detail: 'thread(d, pitch, h, chamfer)  — square ends',
       },
+      {
+        template: 'thread(d = ${1:8}, pitch = ${2:1.25}, h = ${3:10}, chamfer2 = false)',
+        detail: 'thread(d, pitch, h, chamfer2)  — square top, tapered bottom',
+      },
     ],
   },
   {

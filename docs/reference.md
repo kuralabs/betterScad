@@ -2775,7 +2775,7 @@ See also: [`circle()`](#entry-circle) · [`polygon()`](#entry-polygon) · [`$fn`
 ### thread()
 
 ```
-thread(d, pitch, h, internal, clearance, angle, chamfer, center, segments)
+thread(d, pitch, h, internal, clearance, angle, chamfer, chamfer1, chamfer2, center, segments)
 ```
 
 A screw thread. Give it the diameter of the bolt, how far one turn advances, and how long it should be. Add `internal = true` and you get the hole that same bolt screws into — the two are made to fit.
@@ -2810,6 +2810,17 @@ union() {
 
 *Written with `negative()` instead, so the threaded hole sits next to the thing it goes through.*
 
+```scad
+union() {
+  translate([0, 0, -5]) cylinder(h = 5, r = 7.5, $fn = 6);
+  thread(d = 8, pitch = 1.25, h = 10, chamfer1 = false, $fn = 48);
+}
+```
+
+<img src="images/reference/thread-one-end.png" alt="chamfer1 = false leaves the bottom square where it meets the head; the tip still tapers so a nut can start on it." width="420">
+
+*`chamfer1 = false` leaves the bottom square where it meets the head; the tip still tapers so a nut can start on it.*
+
 | Argument | |
 | --- | --- |
 | `d` | Outside diameter, across the crests. |
@@ -2819,6 +2830,8 @@ union() {
 | `clearance` | Fit between the pair, applied to the internal thread only. Default `0.2`. |
 | `angle` | Included angle of the tooth. Default `60`. |
 | `chamfer` | Shape the ends — taper outside, countersink inside. Default `true`. |
+| `chamfer1` | Bottom end only, overriding `chamfer`. |
+| `chamfer2` | Top end only, overriding `chamfer`. |
 | `center` | `true` centres it on the origin. Default `false`. |
 | `segments` | Facets per turn. Defaults from `$fn`, floored at 24. |
 
@@ -2835,6 +2848,8 @@ The clearance is uniform, not merely radial: the female groove is wider across t
 Both are the same construction with one number changed, so a bolt and its hole cannot drift apart. Anything true of one is true of the other.
 
 `chamfer` (default `true`) shapes the ends. External threads taper in, so the first turn runs out instead of ending in a knife edge that will not print. Internal ones flare out into a countersink, which is what lets a bolt start square rather than cross-threading. Set it `false` for a thread that continues into adjoining geometry.
+
+`chamfer1` and `chamfer2` shape one end each — **1 is the bottom, 2 is the top**, as on `cylinder()` — and either overrides `chamfer` for its own end. `chamfer1 = false` on a bolt standing on its head keeps the tip tapered and leaves the end that meets the head square.
 
 `angle` (default `60`) is the included angle of the tooth. 60 is the ISO metric profile; 29 is roughly an Acme leadscrew. The crest and root truncations follow ISO proportions at any angle.
 

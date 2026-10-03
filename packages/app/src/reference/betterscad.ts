@@ -342,7 +342,8 @@ export const NEW_SHAPES: ReferenceGroup = {
     {
       id: 'thread',
       name: 'thread()',
-      signature: 'thread(d, pitch, h, internal, clearance, angle, chamfer, center, segments)',
+      signature:
+        'thread(d, pitch, h, internal, clearance, angle, chamfer, chamfer1, chamfer2, center, segments)',
       extension: true,
       plain:
         'A screw thread. Give it the diameter of the bolt, how far one turn advances, and how ' +
@@ -369,6 +370,10 @@ export const NEW_SHAPES: ReferenceGroup = {
           'turn runs out instead of ending in a knife edge that will not print. Internal ones ' +
           'flare out into a countersink, which is what lets a bolt start square rather than ' +
           'cross-threading. Set it `false` for a thread that continues into adjoining geometry.',
+        '`chamfer1` and `chamfer2` shape one end each — **1 is the bottom, 2 is the top**, as ' +
+          'on `cylinder()` — and either overrides `chamfer` for its own end. ' +
+          '`chamfer1 = false` on a bolt standing on its head keeps the tip tapered and leaves ' +
+          'the end that meets the head square.',
         '`angle` (default `60`) is the included angle of the tooth. 60 is the ISO metric ' +
           'profile; 29 is roughly an Acme leadscrew. The crest and root truncations follow ISO ' +
           'proportions at any angle.',
@@ -398,6 +403,8 @@ export const NEW_SHAPES: ReferenceGroup = {
           name: 'chamfer',
           description: 'Shape the ends — taper outside, countersink inside. Default `true`.',
         },
+        { name: 'chamfer1', description: 'Bottom end only, overriding `chamfer`.' },
+        { name: 'chamfer2', description: 'Top end only, overriding `chamfer`.' },
         { name: 'center', description: '`true` centres it on the origin. Default `false`.' },
         { name: 'segments', description: 'Facets per turn. Defaults from `$fn`, floored at 24.' },
       ],
@@ -435,6 +442,17 @@ export const NEW_SHAPES: ReferenceGroup = {
           caption:
             'Written with `negative()` instead, so the threaded hole sits next to the thing it ' +
             'goes through.',
+        },
+        {
+          code: `union() {
+  translate([0, 0, -5]) cylinder(h = 5, r = 7.5, $fn = 6);
+  thread(d = 8, pitch = 1.25, h = 10, chamfer1 = false, $fn = 48);
+}`,
+          image: 'thread-one-end',
+          view: 'plan',
+          caption:
+            '`chamfer1 = false` leaves the bottom square where it meets the head; the tip still ' +
+            'tapers so a nut can start on it.',
         },
       ],
       see: ['negative', 'cylinder', 'difference', 'gear', 'regular_polygon', 'fn'],

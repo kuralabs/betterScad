@@ -481,6 +481,10 @@ kinds. An external thread tapers in, so its first turn runs out instead of
 ending in a knife edge that will not print. An internal one flares into a
 countersink, which is what lets a bolt start square rather than cross-threading.
 Turn it off for a thread that continues into adjoining geometry.
+`chamfer1` and `chamfer2` shape one end each — 1 is the bottom and 2 the top, as
+on `cylinder()` — and either overrides `chamfer` for its own end, so
+`chamfer2 = false` gives a bolt that tapers at its tip and stays square where it
+meets the head.
 
 `angle` (default `60`, the ISO metric profile; 29 is roughly an Acme leadscrew)
 is the included angle of the tooth, and `center` behaves as it does for

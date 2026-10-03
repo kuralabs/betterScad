@@ -151,6 +151,9 @@ test('the legacy export is the same solid', async () => {
     `${M8}thread(d = 8, pitch = 1.25, h = 10, center = true, chamfer = false);`,
     `${M8}thread(d = 12, pitch = 1.75, h = 8, angle = 29, segments = 30);`,
     '$fa = 6; $fs = 0.4;\nthread(d = 6, pitch = 1, h = 6);',
+    `${M8}thread(d = d, pitch = p, h = h, chamfer2 = false);`,
+    `${M8}thread(d = d, pitch = p, h = h, internal = true, chamfer1 = false);`,
+    `${M8}thread(d = d, pitch = p, h = h, chamfer = false, chamfer2 = true);`,
   ];
   for (const source of sources) {
     const expected = await measure(source);
@@ -177,6 +180,37 @@ test('the ends are shaped, and can be asked not to be', async () => {
     `${M8}thread(d = d, pitch = p, h = h, internal = true, chamfer = false);`,
   );
   assert.ok(flared > blunt, `countersunk ${flared} should exceed blunt ${blunt}`);
+});
+
+test('chamfer1 and chamfer2 shape one end each, overriding chamfer', async () => {
+  const both = await volume(`${M8}thread(d = d, pitch = p, h = h);`);
+  const square = await volume(`${M8}thread(d = d, pitch = p, h = h, chamfer = false);`);
+  const bottom = await volume(`${M8}thread(d = d, pitch = p, h = h, chamfer2 = false);`);
+  const top = await volume(`${M8}thread(d = d, pitch = p, h = h, chamfer1 = false);`);
+  assert.ok(both < bottom && bottom < square, `one end ${bottom} sits between ${both} and ${square}`);
+  assert.ok(both < top && top < square, `one end ${top} sits between ${both} and ${square}`);
+
+  // Either override wins over `chamfer` in both directions.
+  const onlyTop = await volume(
+    `${M8}thread(d = d, pitch = p, h = h, chamfer = false, chamfer2 = true);`,
+  );
+  assert.ok(Math.abs(onlyTop - top) < 1e-9, `chamfer2 = true over false: ${onlyTop} vs ${top}`);
+  const neither = await volume(
+    `${M8}thread(d = d, pitch = p, h = h, chamfer1 = false, chamfer2 = false);`,
+  );
+  assert.ok(Math.abs(neither - square) < 1e-9, `both off: ${neither} vs ${square}`);
+
+  // The shaped end is the one asked for: a bottom taper leaves z = 0 narrower.
+  const { geometry } = await render(`${M8}thread(d = d, pitch = p, h = h, chamfer2 = false);`);
+  const points = geometry.parts[0].mesh.positions;
+  let low = 0;
+  let high = 0;
+  for (let i = 0; i < points.length; i += 3) {
+    const r = Math.hypot(points[i], points[i + 1]);
+    if (Math.abs(points[i + 2]) < 1e-9) low = Math.max(low, r);
+    if (Math.abs(points[i + 2] - 10) < 1e-9) high = Math.max(high, r);
+  }
+  assert.ok(low < high, `bottom face reaches ${low}, top ${high}`);
 });
 
 test('center puts the thread on the origin, as cylinder does', async () => {
