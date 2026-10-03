@@ -102,6 +102,7 @@ export class OrbitCamera {
     element.addEventListener('pointermove', this.onPointerMove);
     element.addEventListener('pointerup', this.onPointerUp);
     element.addEventListener('pointercancel', this.onPointerUp);
+    element.addEventListener('lostpointercapture', this.onPointerUp);
     element.addEventListener('wheel', this.onWheel, { passive: false });
     element.addEventListener('contextmenu', this.onContextMenu);
     this.apply();
@@ -113,6 +114,7 @@ export class OrbitCamera {
     el.removeEventListener('pointermove', this.onPointerMove);
     el.removeEventListener('pointerup', this.onPointerUp);
     el.removeEventListener('pointercancel', this.onPointerUp);
+    el.removeEventListener('lostpointercapture', this.onPointerUp);
     el.removeEventListener('wheel', this.onWheel);
     el.removeEventListener('contextmenu', this.onContextMenu);
   }
@@ -339,6 +341,9 @@ export class OrbitCamera {
   private onPointerDown = (event: PointerEvent): void => {
     if (this.suspended) return;
     this.animation = undefined; // a drag always wins over a running transition
+    // A middle press has default actions of its own — autoscroll, and paste on
+    // Linux — and one that runs can swallow the release, stranding the pan.
+    if (event.button === 1) event.preventDefault();
     this.element.setPointerCapture(event.pointerId);
     this.pointers.set(event.pointerId, new Vector2(event.clientX, event.clientY));
 
@@ -361,6 +366,14 @@ export class OrbitCamera {
 
   private onPointerMove = (event: PointerEvent): void => {
     if (!this.pointers.has(event.pointerId)) return;
+    // A mouse moving with no button held has been released, whether or not a
+    // pointerup said so. Every button shares the one pointer, and a release
+    // the browser kept for itself would otherwise leave the model glued to
+    // the cursor until enough clicks happened to deliver one.
+    if (event.pointerType === 'mouse' && event.buttons === 0) {
+      this.onPointerUp(event);
+      return;
+    }
     this.pointers.set(event.pointerId, new Vector2(event.clientX, event.clientY));
 
     if (this.mode === 'zoom' && this.pointers.size === 2) {
@@ -386,6 +399,9 @@ export class OrbitCamera {
   };
 
   private onPointerUp = (event: PointerEvent): void => {
+    // Releasing capture below fires lostpointercapture, which lands here again;
+    // so does a press the gizmo claimed, which this never tracked.
+    if (!this.pointers.has(event.pointerId)) return;
     this.pointers.delete(event.pointerId);
     if (this.element.hasPointerCapture(event.pointerId)) {
       this.element.releasePointerCapture(event.pointerId);
