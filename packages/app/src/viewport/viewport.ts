@@ -34,7 +34,7 @@ import {
 } from 'three';
 
 import type { MeshPayload } from '../render/protocol.js';
-import { OrbitCamera, type CameraState, type StandardView } from './controls.js';
+import { OrbitCamera, type CameraState, type Projection, type StandardView } from './controls.js';
 import { ViewGizmo } from './view-gizmo.js';
 
 /**
@@ -241,6 +241,8 @@ export class Viewport {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    // Reshapes the orthographic frustum to the new aspect as well.
+    this.controls.apply();
     this.invalidate();
   }
 
@@ -260,7 +262,7 @@ export class Viewport {
       const height = this.container.clientHeight;
       // CSS pixels: the renderer applies its own pixel ratio.
       this.renderer.setViewport(0, 0, width, height);
-      this.renderer.render(this.scene, this.camera);
+      this.renderer.render(this.scene, this.controls.active);
       if (!this.empty) this.gizmo.render(this.renderer, this.controls.orientation, width, height);
     }
     requestAnimationFrame(this.loop);
@@ -584,6 +586,14 @@ export class Viewport {
     this.controls.setStandardView(view);
   }
 
+  get projection(): Projection {
+    return this.controls.projection;
+  }
+
+  set projection(mode: Projection) {
+    this.controls.projection = mode;
+  }
+
   get cameraState(): CameraState {
     return this.controls.snapshot();
   }
@@ -770,8 +780,7 @@ export class Viewport {
    * half the part from far away.
    */
   private worldPerPixel(depth: number): number {
-    const height = this.renderer.domElement.clientHeight || 1;
-    return (2 * depth * Math.tan((this.camera.fov * Math.PI) / 360)) / height;
+    return this.controls.worldPerPixel(depth);
   }
 
   /**
@@ -811,7 +820,7 @@ export class Viewport {
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
     );
-    this.raycaster.setFromCamera(this.pointer, this.camera);
+    this.raycaster.setFromCamera(this.pointer, this.controls.active);
     const hits = this.raycaster.intersectObjects(
       [...this.modelGroup.children, ...this.contourGroup.children],
       true,
@@ -1001,7 +1010,7 @@ export class Viewport {
 
   /** Renders synchronously and returns the canvas contents as a PNG blob. */
   async capture(): Promise<Blob | null> {
-    this.renderer.render(this.scene, this.camera);
+    this.renderer.render(this.scene, this.controls.active);
     return new Promise((resolve) => {
       this.renderer.domElement.toBlob((blob) => resolve(blob), 'image/png');
     });

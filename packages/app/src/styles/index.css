@@ -1025,10 +1025,14 @@ textarea {
 
 /* Reset and fit, directly beneath the view cube and the same width as it, so
    the whole camera control reads as one object. */
+/* Four buttons are wider than the 104px cube above them, so the row is its own
+   width with a tighter gap, and moved out by half the difference to stay
+   centred under the cube: 4 × 26 + 3 × 4 = 116, so 6px either side. */
 .viewport__tools--gizmo {
-  right: var(--bs-space-3);
+  right: calc(var(--bs-space-3) - 6px);
   bottom: var(--bs-space-3);
-  width: 104px;
+  width: 116px;
+  gap: 4px;
   justify-content: center;
 }
 

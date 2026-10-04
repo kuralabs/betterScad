@@ -130,6 +130,9 @@ const ICONS: Record<string, string> = {
   // Isometric cube: a hexagon outline with the three edges that meet at the
   // near corner, which is what makes it read as a cube rather than a hexagon.
   cube: 'M8 1.8 13.4 4.9 13.4 11.1 8 14.2 2.6 11.1 2.6 4.9Z M8 8 13.4 4.9M8 8 2.6 4.9M8 8v6.2',
+  // A box whose back face is the same size as its front, joined by parallel
+  // edges: no vanishing point, which is what orthographic means.
+  orthographic: 'M2 5.5h8.5v8.5H2zM5.5 2H14v8.5M2 5.5 5.5 2M10.5 5.5 14 2M10.5 14 14 10.5',
 };
 
 /**

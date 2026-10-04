@@ -14,7 +14,15 @@
  * orbit's equator — right where you drag through to look at the back of a model.
  */
 
-import { MathUtils, PerspectiveCamera, Quaternion, Vector2, Vector3 } from 'three';
+import {
+  type Camera,
+  MathUtils,
+  OrthographicCamera,
+  PerspectiveCamera,
+  Quaternion,
+  Vector2,
+  Vector3,
+} from 'three';
 
 export interface ControlsOptions {
   onChange(): void;
@@ -31,6 +39,15 @@ export interface ControlsOptions {
 }
 
 export type StandardView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso';
+
+/**
+ * How the view projects: with depth, or flat.
+ *
+ * Orthographic keeps parallel lines parallel and sizes true at any depth, which
+ * is what a front or top view is for — lining edges up, reading a profile,
+ * comparing two features that are not the same distance away.
+ */
+export type Projection = 'perspective' | 'orthographic';
 
 /**
  * A camera pose, in a form that survives JSON.
@@ -93,6 +110,17 @@ export class OrbitCamera {
   /** Set while a gizmo owns the pointer, so the viewport does not also orbit. */
   suspended = false;
 
+  /**
+   * The flat twin of `camera`, posed identically.
+   *
+   * Its frustum is the slice of the perspective one at the target — the same
+   * `radius` stands for the same zoom in both — so switching between them
+   * keeps whatever sits at the target exactly where it was, and every bit of
+   * orbit, pan and zoom maths here works for both unchanged.
+   */
+  readonly orthographic = new OrthographicCamera();
+  private projectionMode: Projection = 'perspective';
+
   constructor(
     readonly camera: PerspectiveCamera,
     private readonly element: HTMLElement,
@@ -105,6 +133,7 @@ export class OrbitCamera {
     element.addEventListener('lostpointercapture', this.onPointerUp);
     element.addEventListener('wheel', this.onWheel, { passive: false });
     element.addEventListener('contextmenu', this.onContextMenu);
+    this.updateClipPlanes();
     this.apply();
   }
 
@@ -120,6 +149,34 @@ export class OrbitCamera {
   }
 
   // -- state ----------------------------------------------------------------
+
+  get projection(): Projection {
+    return this.projectionMode;
+  }
+
+  set projection(mode: Projection) {
+    if (mode === this.projectionMode) return;
+    this.projectionMode = mode;
+    this.updateClipPlanes();
+    this.apply();
+  }
+
+  /** The camera to render and pick with. */
+  get active(): Camera {
+    return this.projectionMode === 'orthographic' ? this.orthographic : this.camera;
+  }
+
+  /**
+   * World units per pixel at `depth` from the camera.
+   *
+   * One number for an orthographic view, whatever the depth: that is the
+   * point of one.
+   */
+  worldPerPixel(depth: number): number {
+    const height = this.element.clientHeight || 1;
+    const at = this.projectionMode === 'orthographic' ? this.radius : depth;
+    return (2 * at * Math.tan(MathUtils.degToRad(this.camera.fov) / 2)) / height;
+  }
 
   get distance(): number {
     return this.radius;
@@ -195,10 +252,24 @@ export class OrbitCamera {
     this.radius = MathUtils.clamp(this.radius, this.minDistance, this.maxDistance);
     this.polar = MathUtils.clamp(this.polar, POLAR_LIMIT, Math.PI - POLAR_LIMIT);
 
-    this.camera.up.set(0, 0, 1); // Z-up, matching OpenSCAD
-    this.camera.position.copy(this.target).add(this.offsetFor(this.azimuth, this.polar));
-    this.camera.lookAt(this.target);
-    this.camera.updateMatrixWorld();
+    const position = this.target.clone().add(this.offsetFor(this.azimuth, this.polar));
+    for (const camera of [this.camera, this.orthographic]) {
+      camera.up.set(0, 0, 1); // Z-up, matching OpenSCAD
+      camera.position.copy(position);
+      camera.lookAt(this.target);
+      camera.updateMatrixWorld();
+    }
+    // The flat frustum follows the zoom, so it is resized on every move.
+    const halfHeight = this.radius * Math.tan(MathUtils.degToRad(this.camera.fov) / 2);
+    const halfWidth = halfHeight * this.camera.aspect;
+    const ortho = this.orthographic;
+    if (ortho.top !== halfHeight || ortho.right !== halfWidth) {
+      ortho.left = -halfWidth;
+      ortho.right = halfWidth;
+      ortho.top = halfHeight;
+      ortho.bottom = -halfHeight;
+      ortho.updateProjectionMatrix();
+    }
     this.options.onChange();
   }
 
@@ -231,6 +302,14 @@ export class OrbitCamera {
     this.camera.near = Math.max(this.radius / 5000, 0.01);
     this.camera.far = this.radius * 100;
     this.camera.updateProjectionMatrix();
+    // Zooming an orthographic view moves the camera in, but nothing gets
+    // closer: the near plane sits behind it, so a model the camera has moved
+    // inside is still drawn whole. Depth is linear here, so the range costs
+    // nothing in precision that matters.
+    const reach = Math.max(this.radius * 100, 10_000);
+    this.orthographic.near = -reach;
+    this.orthographic.far = reach;
+    this.orthographic.updateProjectionMatrix();
   }
 
   /** Frames a bounding box, leaving a comfortable margin. */
@@ -481,9 +560,7 @@ export class OrbitCamera {
    * same number of pixels regardless of zoom level.
    */
   private panBy(dx: number, dy: number): void {
-    const height = this.element.clientHeight || 1;
-    const worldPerPixel =
-      (2 * this.radius * Math.tan(MathUtils.degToRad(this.camera.fov) / 2)) / height;
+    const worldPerPixel = this.worldPerPixel(this.radius);
 
     const right = new Vector3().setFromMatrixColumn(this.camera.matrix, 0);
     const up = new Vector3().setFromMatrixColumn(this.camera.matrix, 1);

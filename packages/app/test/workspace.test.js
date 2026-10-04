@@ -116,3 +116,19 @@ test('closing a tab removes that tab and no other', () => {
     ['one.scad', 'two.scad'],
   );
 });
+
+test('the orthographic view is remembered, and off for a session saved before it', () => {
+  // A session from before the setting existed has no `orthographic` key at
+  // all; it must come back in perspective, as it was left.
+  store.set(STORAGE_KEY, JSON.stringify({ version: 1, documents: [], layout: { showGrid: false } }));
+  const old = new Workspace();
+  assert.ok(old.restore());
+  assert.equal(old.layout.orthographic, false);
+  assert.equal(old.layout.showGrid, false);
+
+  old.layout.orthographic = true;
+  old.persist();
+  const reloaded = new Workspace();
+  assert.ok(reloaded.restore());
+  assert.equal(reloaded.layout.orthographic, true);
+});

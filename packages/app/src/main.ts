@@ -435,6 +435,7 @@ class App {
       grid: this.workspace.layout.showGrid,
       axes: this.workspace.layout.showAxes,
     });
+    this.viewport.projection = this.workspace.layout.orthographic ? 'orthographic' : 'perspective';
 
     // The HUD tracks the camera, which changes far more often than anything
     // else on screen, so it updates directly rather than through refreshChrome.
@@ -459,9 +460,10 @@ class App {
    *
    * Named views used to live in a button stack; the view cube replaces them and
    * shows the current orientation besides. What is left are the two things the
-   * cube cannot express — reset and fit — tucked directly beneath it, and the
-   * two display toggles, moved out of the way to the opposite corner. Every
-   * named view is still reachable from the command palette.
+   * cube cannot express — reset, fit and the projection — tucked directly
+   * beneath it, and the display toggles (grid, measure, colours), moved out of
+   * the way to the opposite corner. Every named view is still reachable from the
+   * command palette.
    */
   private buildViewTools(): HTMLElement[] {
     // --- display toggles, top-left, each its own control ---
@@ -518,6 +520,26 @@ class App {
     };
     this.setVaryColorsState(this.workspace.layout.varyColors);
 
+    const orthoButton = button({
+      iconName: 'orthographic',
+      title: 'Orthographic',
+      hint: 'Orthographic view — no perspective, true sizes at any depth',
+      onClick: () => this.toggleOrthographic(),
+    });
+    orthoButton.classList.add('viewport__control', 'viewport__control--round');
+    this.setOrthographicState = (on: boolean): void => {
+      orthoButton.classList.toggle('btn--active', on);
+      orthoButton.setAttribute('aria-pressed', String(on));
+      setHint(
+        orthoButton,
+        on
+          ? 'Perspective view — depth, as the eye sees it'
+          : 'Orthographic view — no perspective, true sizes at any depth',
+      );
+      orthoButton.setAttribute('aria-label', 'Orthographic view');
+    };
+    this.setOrthographicState(this.workspace.layout.orthographic);
+
     const displayTools = el('div', { class: 'viewport__tools viewport__tools--topleft' }, [
       gridButton,
       measureButton,
@@ -525,6 +547,7 @@ class App {
     ]);
 
     // --- camera, under the view cube ---
+
     const cameraButton = (iconName: string, hint: string, onClick: () => void): HTMLButtonElement => {
       const node = button({ iconName, hint, title: hint, onClick });
       node.classList.add('viewport__control', 'viewport__control--round');
@@ -540,9 +563,22 @@ class App {
       }),
       cameraButton('frame', 'Fit the model in view', () => this.viewport.frameAll()),
       cameraButton('cube', 'Isometric view', () => this.viewport.setView('iso')),
+      orthoButton,
     ]);
 
     return [displayTools, cameraTools];
+  }
+
+  /** Set by `buildViewTools`, so the command palette can keep the button honest. */
+  private setOrthographicState: (on: boolean) => void = () => {};
+
+  /** Flat view or perspective, for the whole app, remembered across reloads. */
+  private toggleOrthographic(): void {
+    const on = !this.workspace.layout.orthographic;
+    this.workspace.layout.orthographic = on;
+    this.viewport.projection = on ? 'orthographic' : 'perspective';
+    this.setOrthographicState(on);
+    this.workspace.persist();
   }
 
   /** Set by `buildViewTools`, so the command palette can keep the button honest. */
@@ -1907,6 +1943,12 @@ class App {
           this.viewport.setHelperVisibility({ grid: this.workspace.layout.showGrid });
           this.workspace.persist();
         },
+      },
+      {
+        id: 'view.orthographic',
+        category: 'View',
+        title: 'Toggle orthographic view',
+        run: () => this.toggleOrthographic(),
       },
       {
         id: 'view.colors',

@@ -73,6 +73,12 @@ export interface LayoutState {
   /** Paint each item its own colour in the viewport, to tell touching ones apart. */
   varyColors: boolean;
   /**
+   * Draw the viewport flat, with no perspective. One setting for the app rather
+   * than one per tab: it is how someone likes to look at models, not a property
+   * of any one of them.
+   */
+  orthographic: boolean;
+  /**
    * Which measurement of a circle the editor offers first.
    *
    * Radius and diameter are both right, and people are firmly one or the
@@ -101,6 +107,7 @@ export const DEFAULT_LAYOUT: LayoutState = {
   showGrid: true,
   showAxes: true,
   varyColors: false,
+  orthographic: false,
   roundMeasure: 'diameter',
   inchEntry: true,
   indentWidth: 2,
