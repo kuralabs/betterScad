@@ -343,7 +343,8 @@ export const NEW_SHAPES: ReferenceGroup = {
       id: 'thread',
       name: 'thread()',
       signature:
-        'thread(d, pitch, h, internal, clearance, angle, chamfer, chamfer1, chamfer2, center, segments)',
+        'thread(d, pitch, h, internal, clearance, angle, chamfer, center, segments, ' +
+        'chamfer1, chamfer2, profile, crest, root, depth)',
       extension: true,
       plain:
         'A screw thread. Give it the diameter of the bolt, how far one turn advances, and how ' +
@@ -381,9 +382,31 @@ export const NEW_SHAPES: ReferenceGroup = {
           'on `cylinder()` — and either overrides `chamfer` for its own end. ' +
           '`chamfer1 = false` on a bolt standing on its head keeps the tip tapered and leaves ' +
           'the end that meets the head square.',
-        '`angle` (default `60`) is the included angle of the tooth. 60 is the ISO metric ' +
-          'profile; 29 is roughly an Acme leadscrew. The crest and root truncations follow ISO ' +
-          'proportions at any angle.',
+        '`profile` picks the shape of the tooth. **`"iso"`** (the default) is the metric V: ' +
+          '60° flanks, a narrow crest an eighth of the pitch wide, and a depth of about ' +
+          '0.54 × pitch. **`"trapezoid"`** is the broad tooth of a leadscrew or a jar lid: 30° ' +
+          'flanks, half the pitch deep, with the crest and the root flat each about 0.37 of ' +
+          'the pitch wide (ISO 2904). **`"square"`** stands its flanks straight up and makes ' +
+          'the tooth exactly half the pitch.',
+        'A square tooth leaves a flat overhang under every turn, which sags when it is printed ' +
+          'standing up, so it comes with a warning. It is there because it is a real form, and ' +
+          'it prints well lying on its side. Standing up, `"trapezoid"` is the one to reach for.',
+        '`crest` shapes the tip of the tooth and `root` the bottom of the groove: `"flat"` (the ' +
+          'default) or `"round"`, an arc tangent to both flanks that keeps the diameter where it ' +
+          'was. `root` follows `crest` unless it is given, so `crest = "round"` rounds both — ' +
+          'a knuckle thread, the kind on bottles and jar lids. A rounded tooth has no edge to ' +
+          'snap off or snag, and a rounded root is a stronger groove; both forgive a printer ' +
+          'that blobs.',
+        '`depth` overrides how far the tooth stands out from the core. On `"trapezoid"` and ' +
+          '`"square"` the crest and root flats stay equal as it changes; on `"iso"` the crest ' +
+          'stays an eighth of the pitch. Deeper than the flanks allow, or too shallow to fit a ' +
+          'rounded crest and root, is an error.',
+        '`angle` is the included angle of the flanks, and overrides the profile\'s own: `60` ' +
+          'for `"iso"`, `30` for `"trapezoid"`, `0` for `"square"`. `angle = 90` gives 45° ' +
+          'flanks, which print standing up without support.',
+        'Clearance offsets every one of these shapes evenly — the flanks, the flats and the ' +
+          'arcs alike — so a bolt and its hole fit whatever the tooth. A thread that names none ' +
+          'of `profile`, `crest`, `root` or `depth` is built exactly as it always was.',
         '`center` behaves as it does for `cylinder()`. `segments` is the number of facets per ' +
           'turn; it follows `$fn`/`$fa`/`$fs` but never drops below 24, because a coarse circle ' +
           'is merely faceted while a coarse helix stops being a thread at all.',
@@ -407,7 +430,10 @@ export const NEW_SHAPES: ReferenceGroup = {
             'Fit between the pair, applied to the internal thread only. Default ' +
             '`min(0.4, 0.32 × pitch)`.',
         },
-        { name: 'angle', description: 'Included angle of the tooth. Default `60`.' },
+        {
+          name: 'angle',
+          description: 'Included angle of the flanks. Defaults from the profile: `60`, `30` or `0`.',
+        },
         {
           name: 'chamfer',
           description: 'Shape the ends — taper outside, countersink inside. Default `true`.',
@@ -416,6 +442,13 @@ export const NEW_SHAPES: ReferenceGroup = {
         { name: 'chamfer2', description: 'Top end only, overriding `chamfer`.' },
         { name: 'center', description: '`true` centres it on the origin. Default `false`.' },
         { name: 'segments', description: 'Facets per turn. Defaults from `$fn`, floored at 24.' },
+        {
+          name: 'profile',
+          description: '`"iso"` (default), `"trapezoid"` or `"square"` — the shape of the tooth.',
+        },
+        { name: 'crest', description: 'Tip of the tooth: `"flat"` (default) or `"round"`.' },
+        { name: 'root', description: 'Bottom of the groove: `"flat"` or `"round"`. Defaults to `crest`.' },
+        { name: 'depth', description: 'How far the tooth stands out. Defaults from the profile.' },
       ],
       downgrade:
         'A generated module sweeping the same profile up the same twisted extrusion, defined ' +
@@ -463,6 +496,49 @@ export const NEW_SHAPES: ReferenceGroup = {
             '`chamfer1 = false` leaves the bottom square where it meets the head; the tip still ' +
             'tapers so a nut can start on it.',
         },
+        {
+          code: `for (i = [0 : 3])
+  translate([i % 2 * 26, 0, -floor(i / 2) * 20])
+    thread(d = 20, pitch = 5, h = 15, chamfer = false, $fn = 64,
+      profile = ["iso", "trapezoid", "trapezoid", "square"][i],
+      crest = ["flat", "flat", "round", "flat"][i]);`,
+          image: 'thread-profiles',
+          view: 'front',
+          caption:
+            'The same 20 × 5 thread four ways — top: `"iso"` and `"trapezoid"`; bottom: ' +
+            '`"trapezoid"` with `crest = "round"`, and `"square"`. Seen from the side, the ' +
+            'silhouette is the tooth.',
+        },
+        {
+          code: `// A jar neck: rounded teeth print clean and start easily.
+difference() {
+  union() {
+    cylinder(h = 12, r = 22, $fn = 96);
+    translate([0, 0, 12])
+      thread(d = 40, pitch = 4, h = 10, profile = "trapezoid", crest = "round", $fn = 96);
+  }
+  translate([0, 0, 2]) cylinder(h = 30, r = 16, $fn = 96);
+}`,
+          image: 'thread-jar-lid',
+          view: 'plan',
+          caption:
+            'A jar neck with a rounded trapezoid thread. Its lid is the same `thread()` call ' +
+            'with `internal = true`, subtracted from a cap.',
+        },
+        {
+          code: `thread(d = 16, pitch = 4, h = 24, profile = "trapezoid", $fn = 64);`,
+          image: 'thread-leadscrew',
+          view: 'front',
+          caption: 'A Tr16 × 4 leadscrew: the broad trapezoid tooth a nut can push against.',
+        },
+        {
+          code: `thread(d = 20, pitch = 3, h = 12, crest = "round", depth = 1.2, $fn = 64);`,
+          image: 'thread-shallow-round',
+          view: 'front',
+          caption:
+            'An ISO pitch with a rounded crest and root, and a shallower `depth` — a coarse ' +
+            'thread that is quick to print and forgiving to start.',
+        },
       ],
       see: ['negative', 'cylinder', 'difference', 'gear', 'regular_polygon', 'fn'],
       keywords: [
@@ -471,6 +547,14 @@ export const NEW_SHAPES: ReferenceGroup = {
         'nut',
         'helix',
         'helical',
+        'trapezoidal',
+        'trapezoid',
+        'square thread',
+        'knuckle',
+        'round thread',
+        'jar',
+        'lid',
+        'bottle',
         'metric',
         'iso',
         'm3',

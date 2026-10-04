@@ -42,7 +42,8 @@ test('the line that prompted this', () => {
   const signature = signatureFor('thread', '');
   const left = signature.params.filter((p) => !call.named.includes(p.name)).map((p) => p.name);
   assert.deepEqual(left, [
-    'clearance', 'angle', 'chamfer', 'chamfer1', 'chamfer2', 'center', 'segments', '$fn', '$fa', '$fs',
+    'clearance', 'angle', 'chamfer', 'center', 'segments',
+    'chamfer1', 'chamfer2', 'profile', 'crest', 'root', 'depth', '$fn', '$fa', '$fs',
   ]);
 });
 
@@ -128,12 +129,16 @@ test('a parameter carries the default it falls back to', () => {
     h: undefined,
     internal: 'false',
     clearance: 'min(0.4, 0.32 * pitch)',
-    angle: '60',
+    angle: undefined,
     chamfer: 'true',
-    chamfer1: undefined,
-    chamfer2: undefined,
     center: 'false',
     segments: undefined,
+    chamfer1: undefined,
+    chamfer2: undefined,
+    profile: '"iso"',
+    crest: '"flat"',
+    root: 'crest',
+    depth: undefined,
     $fn: undefined,
     $fa: undefined,
     $fs: undefined,

@@ -1680,6 +1680,133 @@ function threadProfilePoints(
   return points;
 }
 
+/** The tooth shapes `thread(profile = …)` names. */
+const THREAD_PROFILES = ['iso', 'trapezoid', 'square'] as const;
+type ThreadProfile = (typeof THREAD_PROFILES)[number];
+
+/** What `crest` and `root` may be. */
+const THREAD_TIPS = ['flat', 'round'] as const;
+
+/** Each profile's included flank angle, when `angle` does not say. */
+const THREAD_ANGLES: Record<ThreadProfile, number> = { iso: 60, trapezoid: 30, square: 0 };
+
+interface ToothSpec {
+  /** Crest radius before any clearance. */
+  rmaj: number;
+  depth: number;
+  /** Half the width of the crest flat, along the axis. */
+  crestHalf: number;
+  /** Half the included flank angle, in degrees. */
+  halfAngle: number;
+  roundCrest: boolean;
+  roundRoot: boolean;
+  /** How far the whole outline is offset outward: half the clearance, inside. */
+  grow: number;
+  pitch: number;
+  seg: number;
+}
+
+/**
+ * The 2D profile a `thread()` sweeps, for any tooth but the original ISO one.
+ *
+ * The tooth is drawn in its axial section first — `w` along the axis from the
+ * centre of the tooth, `r` out from it — as a radius for every `w` across one
+ * pitch, root included. Mapped into the plane by the same `360 * w / pitch`
+ * rule {@link threadProfilePoints} is built on, that is the bolt's whole cross
+ * section: a closed curve around the axis, with no core cylinder to add and no
+ * seam where a root would otherwise have to meet the next turn's.
+ *
+ * `w` is sampled at `pitch / seg`, which is exactly how far the extrusion turns
+ * between slices, so each slice's points land on the last one's and the helix
+ * is an even grid rather than a field of skewed slivers. The corners where one
+ * piece of the outline gives way to the next are added on top, so a flat crest
+ * keeps its edges and a square flank stays square.
+ *
+ * Clearance is a true offset of the outline, piece by piece. A flank moves out
+ * by `grow / cos(half-angle)` along the axis, a convex arc (a round crest)
+ * grows its radius by `grow` and a concave one (a round root) loses it, each
+ * about the same centre, so every tangency survives the offset.
+ *
+ * Returns the reason, rather than points, when the numbers cannot make a tooth.
+ * `{clearance}` in it is filled in by the caller.
+ */
+function threadToothOutline(spec: ToothSpec): [number, number][] | string {
+  const { rmaj, depth, crestHalf: c, halfAngle, roundCrest, roundRoot, grow, pitch, seg } = spec;
+  const rad = Math.PI / 180;
+  const t = Math.tan(halfAngle * rad);
+  const ca = Math.cos(halfAngle * rad);
+  const sa = Math.sin(halfAngle * rad);
+  const rmin = rmaj - depth;
+  const s = grow / ca;
+  const top = rmaj + grow;
+  const core = rmin + grow;
+  // Half the flat left at the bottom of the groove, on the bolt.
+  const rootHalf = pitch / 2 - c - depth * t;
+
+  if (!(c > 0) || !(rootHalf > 0)) {
+    return `depth ${+depth.toFixed(4)} leaves no room between the flanks at pitch ${pitch}; make it shallower or the angle smaller.`;
+  }
+  // The same margin the ISO tooth keeps: five degrees of groove at the core.
+  if (rootHalf - (grow * (1 - sa)) / ca < (5 * pitch) / 360) {
+    return `clearance {clearance} is too large for pitch ${pitch}; the groove closes up.`;
+  }
+
+  // The arcs tangent to both flanks that keep the crest at the major radius
+  // and the root at the minor one.
+  const rhoC = (c * ca) / (1 - sa);
+  const rhoR = (rootHalf * ca) / (1 - sa);
+  const qc = rhoC + grow;
+  const qr = rhoR - grow;
+  const cc = rmaj - rhoC;
+  const cr = rmin + rhoR;
+
+  // Where the crest gives way to the flank, and the flank to the root.
+  const head: [number, number] = roundCrest ? [qc * ca, cc + qc * sa] : [c + s - grow * t, top];
+  const foot: [number, number] = roundRoot
+    ? [pitch / 2 - qr * ca, cr - qr * sa]
+    : [c + s + (rmaj - core) * t, core];
+  if (head[0] > foot[0] + 1e-9 || head[1] < foot[1] - 1e-9) {
+    return `depth ${+depth.toFixed(4)} is too shallow for a rounded ${roundCrest && roundRoot ? 'crest and root' : roundCrest ? 'crest' : 'root'}; the curves would overlap.`;
+  }
+
+  const crestAt = (w: number): number =>
+    roundCrest ? cc + Math.sqrt(Math.max(0, qc * qc - w * w)) : top;
+  const flankAt = (w: number): number =>
+    head[1] + ((foot[1] - head[1]) * (w - head[0])) / (foot[0] - head[0]);
+  const rootAt = (w: number): number =>
+    roundRoot ? cr - Math.sqrt(Math.max(0, qr * qr - (pitch / 2 - w) * (pitch / 2 - w))) : core;
+
+  // The grid points strictly inside (a, b), then b itself.
+  const step = pitch / seg;
+  const across = (a: number, b: number, at: (w: number) => number, end: [number, number]) => {
+    const out: [number, number][] = [];
+    for (let k = 0; k * step < b - 1e-9; k++) {
+      if (k * step > a + 1e-9) out.push([k * step, at(k * step)]);
+    }
+    out.push(end);
+    return out;
+  };
+  // One side of the tooth, from the middle of the crest to the middle of the
+  // groove.
+  const half: [number, number][] = [
+    [0, crestAt(0)],
+    ...across(0, head[0], crestAt, head),
+    ...across(head[0], foot[0], flankAt, foot),
+    ...across(foot[0], pitch / 2, rootAt, [pitch / 2, rootAt(pitch / 2)]),
+  ];
+
+  const polar = ([w, r]: [number, number]): [number, number] => {
+    const a = (360 * w * rad) / pitch;
+    return [r * Math.cos(a), r * Math.sin(a)];
+  };
+  // Round from the middle of one groove to the middle of the next, which is
+  // the same point and so is drawn once.
+  const points: [number, number][] = [];
+  for (let i = half.length - 1; i >= 1; i--) points.push(polar([-half[i][0], half[i][1]]));
+  for (let i = 0; i < half.length - 1; i++) points.push(polar(half[i]));
+  return points;
+}
+
 /**
  * The solid a thread is trimmed to.
  *
@@ -2350,15 +2477,23 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
       'clearance',
       'angle',
       'chamfer',
-      'chamfer1',
-      'chamfer2',
       'center',
       'segments',
+      // Added later, so appended: a call that counts its arguments out by
+      // position still lands each one where it always did.
+      'chamfer1',
+      'chamfer2',
+      'profile',
+      'crest',
+      'root',
+      'depth',
     ],
     defaults: {
       internal: 'false',
       clearance: 'min(0.4, 0.32 * pitch)',
-      angle: '60',
+      profile: '"iso"',
+      crest: '"flat"',
+      root: 'crest',
       chamfer: 'true',
       center: 'false',
     },
@@ -2366,17 +2501,53 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
       const d = asNumber(args.get('d'), 0);
       const pitch = asNumber(args.get('pitch'), 0);
       const h = asNumber(args.get('h'), 0);
-      const angle = args.get('angle') === undefined ? 60 : asNumber(args.get('angle'), 60);
 
       const reject = (message: string): undefined => {
         interp.error(`thread(): ${message}`, span, 'eval.bad-thread');
         return undefined;
       };
+      // A name that is not one of the choices falls back with a warning, as
+      // `edge_style` does: a typo should not cost the whole model.
+      const choice = <T extends string>(key: string, options: readonly T[], fallback: T): T => {
+        const raw = args.get(key);
+        if (raw === undefined) return fallback;
+        if (typeof raw === 'string' && (options as readonly string[]).includes(raw)) return raw as T;
+        const list = options.map((o) => `"${o}"`).join(', ');
+        interp.warn(
+          `thread(): ${key} must be one of ${list}; got ${typeof raw === 'string' ? `"${raw}"` : String(raw)}. Using "${fallback}".`,
+          span,
+          'eval.thread-choice',
+        );
+        return fallback;
+      };
+      const profile = choice('profile', THREAD_PROFILES, 'iso');
+      const crest = choice('crest', THREAD_TIPS, 'flat');
+      const root = choice('root', THREAD_TIPS, crest);
+      const depthArg = args.get('depth');
+      const angleArg = args.get('angle');
+      const angle =
+        angleArg === undefined ? THREAD_ANGLES[profile] : asNumber(angleArg, THREAD_ANGLES[profile]);
+
+      // The thread every model before `profile` existed was written against
+      // keeps its own construction, untouched: same points, same numbers.
+      const legacy = profile === 'iso' && crest === 'flat' && root === 'flat' && depthArg === undefined;
+
       if (!(d > 0)) return reject(`d must be greater than 0, got ${d}.`);
       if (!(pitch > 0)) return reject(`pitch must be greater than 0, got ${pitch}.`);
       if (!(h > 0)) return reject(`h must be greater than 0, got ${h}.`);
-      if (!(angle > 0 && angle < 180)) {
+      if (legacy ? !(angle > 0 && angle < 180) : !(angle >= 0 && angle < 180)) {
         return reject(`angle must be between 0 and 180, got ${angle}.`);
+      }
+      if (!legacy && profile === 'iso' && depthArg === undefined && angle === 0) {
+        return reject('an "iso" tooth at angle 0 has no depth; give depth=, or use profile = "square".');
+      }
+      if (profile === 'square' || (angle === 0 && !legacy)) {
+        interp.warn(
+          'thread(): square teeth leave a flat overhang under every turn, which sags when ' +
+            'printed standing up. "trapezoid" prints cleaner, or lay the part on its side.',
+          span,
+          'eval.thread-overhang',
+        );
       }
 
       const internal = isTruthy(args.get('internal'));
@@ -2395,38 +2566,86 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
       const chamfer2 = end('chamfer2');
       const center = isTruthy(args.get('center'));
 
-      const halfTan = Math.tan(((angle / 2) * Math.PI) / 180);
-      // Height of the sharp V the profile is truncated from, as ISO defines it,
-      // with ISO's truncations: H/8 off the crest and H/4 off the root.
-      const vHeight = pitch / 2 / halfTan;
       const grow = internal ? clearance / 2 : 0;
-
-      const rmaj = d / 2 + grow;
-      const rmin = d / 2 - (5 * vHeight) / 8 + grow;
-      const apex = d / 2 + vHeight / 8 + 2 * grow;
-
-      if (rmin <= 0) {
-        return reject(
-          `pitch ${pitch} is too coarse for d = ${d}; the thread would cut past the axis.`,
-        );
-      }
-      // The tooth already spans 270 degrees of the profile at its root. Past a
-      // half turn either side it wraps onto itself and the groove disappears.
-      if ((360 * (apex - rmin) * halfTan) / pitch >= 175) {
-        return reject(`clearance ${clearance} is too large for pitch ${pitch}; the groove closes up.`);
-      }
-
+      const halfTan = Math.tan(((angle / 2) * Math.PI) / 180);
       const res = resolutionFor(args, scope);
       const segArg = args.get('segments');
-      const seg = Math.max(
-        MIN_THREAD_SEGMENTS,
-        segArg !== undefined ? Math.floor(asNumber(segArg, 0)) : fragments(rmaj, res),
-      );
-      // Flank and crest are both sampled at the fragment count's angular step,
-      // so the tooth is exactly as smooth as the cylinder it sits on.
-      const steps = Math.max(4, Math.ceil((seg * (rmaj - rmin) * halfTan) / pitch));
-      const crestAngle = (360 * (apex - rmaj) * halfTan) / pitch;
-      const crestSteps = Math.max(1, Math.ceil((2 * crestAngle * seg) / 360));
+      // `segments = 0` is "work it out", as the exported module reads it.
+      const segCount = segArg !== undefined ? Math.floor(asNumber(segArg, 0)) : 0;
+      const segmentsFor = (radius: number): number =>
+        Math.max(MIN_THREAD_SEGMENTS, segCount > 0 ? segCount : fragments(radius, res));
+
+      // What the rest of the construction needs from the tooth: the crest and
+      // core radii, how deep it is, and the outline to sweep.
+      let rmaj: number;
+      let rmin: number;
+      let seg: number;
+      let profilePoints: [number, number][];
+
+      if (legacy) {
+        // Height of the sharp V the profile is truncated from, as ISO defines
+        // it, with ISO's truncations: H/8 off the crest and H/4 off the root.
+        const vHeight = pitch / 2 / halfTan;
+        rmaj = d / 2 + grow;
+        rmin = d / 2 - (5 * vHeight) / 8 + grow;
+        const apex = d / 2 + vHeight / 8 + 2 * grow;
+
+        if (rmin <= 0) {
+          return reject(
+            `pitch ${pitch} is too coarse for d = ${d}; the thread would cut past the axis.`,
+          );
+        }
+        // The tooth already spans 270 degrees of the profile at its root. Past
+        // a half turn either side it wraps onto itself and the groove
+        // disappears.
+        if ((360 * (apex - rmin) * halfTan) / pitch >= 175) {
+          return reject(`clearance ${clearance} is too large for pitch ${pitch}; the groove closes up.`);
+        }
+
+        seg = segmentsFor(rmaj);
+        // Flank and crest are both sampled at the fragment count's angular
+        // step, so the tooth is exactly as smooth as the cylinder it sits on.
+        const steps = Math.max(4, Math.ceil((seg * (rmaj - rmin) * halfTan) / pitch));
+        const crestAngle = (360 * (apex - rmaj) * halfTan) / pitch;
+        const crestSteps = Math.max(1, Math.ceil((2 * crestAngle * seg) / 360));
+        profilePoints = threadProfilePoints(rmin, rmaj, apex, halfTan, pitch, steps, crestSteps);
+      } else {
+        const depth =
+          depthArg !== undefined
+            ? asNumber(depthArg, 0)
+            : profile === 'iso'
+              ? (5 * pitch) / (16 * halfTan)
+              : pitch / 2;
+        if (!(depth > 0)) return reject(`depth must be greater than 0, got ${depth}.`);
+        // ISO keeps its crest at an eighth of the pitch whatever the depth;
+        // the trapezoid and the square share the pitch evenly between the
+        // crest flat and the root flat, which is what ISO 2904 does.
+        const crestHalf = profile === 'iso' ? pitch / 16 : (pitch / 2 - depth * halfTan) / 2;
+        rmaj = d / 2 + grow;
+        rmin = d / 2 - depth + grow;
+        if (rmin <= 0) {
+          return reject(
+            `depth ${depth.toFixed(3)} is too deep for d = ${d}; the thread would cut past the axis.`,
+          );
+        }
+        seg = segmentsFor(rmaj);
+        const outline = threadToothOutline({
+          rmaj: d / 2,
+          depth,
+          crestHalf,
+          halfAngle: angle / 2,
+          roundCrest: crest === 'round',
+          roundRoot: root === 'round',
+          grow,
+          pitch,
+          seg,
+        });
+        if (typeof outline === 'string') {
+          return reject(outline.replace('{clearance}', String(clearance)));
+        }
+        profilePoints = outline;
+      }
+
       // A turn of margin at each end, so the trim below always cuts through
       // full material rather than having to close a partial turn.
       const turns = Math.ceil(h / pitch) + 2;
@@ -2469,7 +2688,7 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
               node(
                 'polygon',
                 {
-                  points: threadProfilePoints(rmin, rmaj, apex, halfTan, pitch, steps, crestSteps),
+                  points: profilePoints,
                   paths: undefined,
                 },
                 [],
@@ -2499,7 +2718,9 @@ export const BUILTIN_MODULES: Record<string, BuiltinModule> = {
           span,
         );
 
-      const parts = [core, ridge];
+      // The general outline is the whole cross-section; only the ISO tooth
+      // sits on a core.
+      const parts = legacy ? [core, ridge] : [ridge];
       if (internal && cut1 > 0) parts.push(revolve(threadMouthProfile(rmaj, h, cut1, false)));
       if (internal && cut2 > 0) parts.push(revolve(threadMouthProfile(rmaj, h, cut2, true)));
 

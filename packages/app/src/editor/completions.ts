@@ -271,7 +271,7 @@ const MODULES: BuiltinDoc[] = [
     label: 'thread',
     template: 'thread(d = ${1:8}, pitch = ${2:1.25}, h = ${3:10})',
     detail: 'thread(d, pitch, h)  — BetterSCAD',
-    info: 'A helical screw thread. `d` is the outside diameter and `pitch` the rise per turn (M8 is d = 8, pitch = 1.25).\n\n`internal = true` makes the mating hole: put it under negative(), and the bolt from the same d and pitch screws into it. `clearance` is the fit; by default it follows the pitch — min(0.4, 0.32 × pitch), so 0.4 for M8 and up, less on finer threads.\n\nExports to `.scad` as a generated module building the same swept helix.',
+    info: 'A helical screw thread. `d` is the outside diameter and `pitch` the rise per turn (M8 is d = 8, pitch = 1.25).\n\n`internal = true` makes the mating hole: put it under negative(), and the bolt from the same d and pitch screws into it. `clearance` is the fit; by default it follows the pitch — min(0.4, 0.32 × pitch), so 0.4 for M8 and up, less on finer threads.\n\n`profile` picks the tooth: "iso" (default), "trapezoid" or "square". `crest` and `root` are "flat" or "round", and `depth` overrides how tall the tooth stands.\n\nExports to `.scad` as a generated module building the same swept helix.',
     type: 'class',
     forms: [
       {
@@ -293,6 +293,18 @@ const MODULES: BuiltinDoc[] = [
       {
         template: 'thread(d = ${1:8}, pitch = ${2:1.25}, h = ${3:10}, chamfer2 = false)',
         detail: 'thread(d, pitch, h, chamfer2)  — square top, tapered bottom',
+      },
+      {
+        template: 'thread(d = ${1:20}, pitch = ${2:4}, h = ${3:16}, profile = "trapezoid")',
+        detail: 'thread(d, pitch, h, profile)  — broad trapezoid tooth',
+      },
+      {
+        template: 'thread(d = ${1:30}, pitch = ${2:4}, h = ${3:12}, profile = "trapezoid", crest = "round")',
+        detail: 'thread(d, pitch, h, profile, crest)  — rounded, jar-lid style',
+      },
+      {
+        template: 'thread(d = ${1:20}, pitch = ${2:4}, h = ${3:16}, profile = "square")',
+        detail: 'thread(d, pitch, h, profile)  — square tooth',
       },
     ],
   },

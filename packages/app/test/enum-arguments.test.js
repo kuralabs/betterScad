@@ -58,6 +58,13 @@ test('text alignment and direction are offered too', () => {
     ['"ltr"', '"rtl"', '"ttb"', '"btt"']);
 });
 
+test('thread profiles and tips are offered', () => {
+  assert.deepEqual(labels(completeAt('thread(d = 8, pitch = 1.25, h = 10, profile = |);')),
+    ['"iso"', '"trapezoid"', '"square"']);
+  assert.deepEqual(labels(completeAt('thread(d = 8, pitch = 1.25, h = 10, crest = |);')),
+    ['"flat"', '"round"']);
+});
+
 test('an argument with no fixed set says nothing', () => {
   assert.equal(completeAt('cylinder(h = |);'), null);
   assert.equal(completeAt('cube(size = |);'), null);
@@ -75,6 +82,7 @@ test('every value offered is one the engine accepts', async () => {
   const CALLS = {
     cylinder: (arg, value) => `cylinder(h = 10, r = 4, chamfer = 1, ${arg} = "${value}");`,
     text: (arg, value) => `text("Ag", ${arg} = "${value}");`,
+    thread: (arg, value) => `thread(d = 20, pitch = 4, h = 8, ${arg} = "${value}", $fn = 24);`,
   };
 
   for (const [module, args] of Object.entries(ENUM_ARGUMENTS)) {

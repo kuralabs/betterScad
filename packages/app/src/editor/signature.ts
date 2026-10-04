@@ -316,6 +316,21 @@ export const ENUM_ARGUMENTS: Record<string, Record<string, { value: string; info
       { value: 'round', info: 'A true arc, tangent to both the wall and the end face.' },
     ],
   },
+  thread: {
+    profile: [
+      { value: 'iso', info: 'Metric V, 60\u00b0 flanks, a narrow crest. The default.' },
+      { value: 'trapezoid', info: 'A broad tooth with 30\u00b0 flanks and wide flats \u2014 leadscrews, big printed threads.' },
+      { value: 'square', info: 'Vertical flanks, half the pitch wide. Sags printed upright; warns.' },
+    ],
+    crest: [
+      { value: 'flat', info: 'The tip of the tooth is cut flat. The default.' },
+      { value: 'round', info: 'An arc tangent to both flanks \u2014 no edge to snap or snag.' },
+    ],
+    root: [
+      { value: 'flat', info: 'The bottom of the groove is flat.' },
+      { value: 'round', info: 'An arc tangent to both flanks \u2014 a stronger groove. Defaults to crest.' },
+    ],
+  },
   text: {
     facing: [
       { value: 'out', info: 'Letters stand away from the centre. The default.' },

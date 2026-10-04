@@ -493,12 +493,46 @@ on `cylinder()` — and either overrides `chamfer` for its own end, so
 `chamfer2 = false` gives a bolt that tapers at its tip and stays square where it
 meets the head.
 
-`angle` (default `60`, the ISO metric profile; 29 is roughly an Acme leadscrew)
-is the included angle of the tooth, and `center` behaves as it does for
-`cylinder()`. `segments` is the number of facets per turn: it follows
-`$fn`/`$fa`/`$fs` but never drops below 24, because a coarse circle is merely
-faceted while a coarse helix stops being a thread at all. A thread dense enough
-to be slow says so rather than just being slow.
+#### Tooth shape: `profile`, `crest`, `root`, `depth`
+
+`profile` picks the tooth. `"iso"` (the default) is the metric V: 60° flanks, a
+crest an eighth of the pitch wide, about 0.54 × pitch deep. `"trapezoid"` is the
+broad tooth of a leadscrew or a jar: 30° flanks, half the pitch deep, crest and
+root flats each about 0.37 of the pitch wide (ISO 2904). `"square"` stands its
+flanks straight up and makes the tooth half the pitch.
+
+`crest` shapes the tip of the tooth and `root` the bottom of the groove —
+`"flat"` (the default) or `"round"`, an arc tangent to both flanks that keeps
+the diameter where it was. `root` follows `crest` unless given, so
+`crest = "round"` rounds both: a knuckle thread, the kind on bottles and jar
+lids. `depth` overrides how far the tooth stands out, and `angle` the included
+flank angle (`60`, `30` or `0` by profile; `angle = 90` gives 45° flanks that
+print standing up without support).
+
+```scad
+thread(d = 16, pitch = 4, h = 24, profile = "trapezoid");                 // Tr16 × 4 leadscrew
+thread(d = 40, pitch = 4, h = 10, profile = "trapezoid", crest = "round"); // jar neck
+thread(d = 20, pitch = 3, h = 12, crest = "round", depth = 1.2);          // coarse, forgiving
+thread(d = 20, pitch = 4, h = 16, profile = "square");                    // warns: overhangs
+```
+
+A square tooth leaves a flat overhang under every turn, which sags printed
+standing up, so it warns; it prints well on its side, and standing up
+`"trapezoid"` is the better choice. Clearance offsets every one of these shapes
+evenly — flanks, flats and arcs alike — so a bolt and its `internal = true` hole
+fit whatever the tooth. A depth deeper than the flanks allow, or too shallow to
+fit a rounded crest and root, is an error.
+
+A thread that names none of `profile`, `crest`, `root` or `depth` is built
+exactly as it always was. The new arguments come after `segments`, so a call
+that passes its arguments by position still means what it did.
+
+#### Everything else
+
+`center` behaves as it does for `cylinder()`. `segments` is the number of facets
+per turn: it follows `$fn`/`$fa`/`$fs` but never drops below 24, because a
+coarse circle is merely faceted while a coarse helix stops being a thread at
+all. A thread dense enough to be slow says so rather than just being slow.
 
 A pitch too coarse for the diameter, or a clearance large enough to close the
 groove up, are errors rather than a shape that is quietly not a thread.

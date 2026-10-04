@@ -152,6 +152,13 @@ test('the legacy export is the same solid', async () => {
     `${M8}thread(d = 12, pitch = 1.75, h = 8, angle = 29, segments = 30);`,
     '$fa = 6; $fs = 0.4;\nthread(d = 6, pitch = 1, h = 6);',
     `$fn = 48;\nthread(d = 4, pitch = 0.7, h = 5, internal = true);`,
+    `$fn = 48;\nthread(d = 20, pitch = 4, h = 12, profile = "trapezoid");`,
+    `$fn = 48;\nthread(d = 20, pitch = 4, h = 12, profile = "trapezoid", crest = "round", internal = true);`,
+    `$fn = 48;\nthread(d = 20, pitch = 4, h = 12, profile = "square", root = "round", chamfer1 = false);`,
+    `$fn = 48;\nthread(d = 8, pitch = 1.25, h = 10, crest = "round", internal = true, center = true);`,
+    `$fn = 48;\nthread(d = 20, pitch = 4, h = 12, profile = "trapezoid", depth = 1.4, angle = 40);`,
+    // Positional, in the order the module has always taken.
+    '$fn = 48;\nthread(8, 1.25, 10, false, 0.2, 60, true, true, 30);',
     `${M8}thread(d = d, pitch = p, h = h, chamfer2 = false);`,
     `${M8}thread(d = d, pitch = p, h = h, internal = true, chamfer1 = false);`,
     `${M8}thread(d = d, pitch = p, h = h, chamfer = false, chamfer2 = true);`,
@@ -229,6 +236,93 @@ test('the default clearance follows the pitch, and every common size builds', as
     const { errors } = await render(`thread(d = ${d}, pitch = ${pitch}, h = 5, internal = true);`);
     assert.deepEqual(errors, [], `M${d} x ${pitch}`);
   }
+});
+
+const PROFILES = ['iso', 'trapezoid', 'square'];
+const TIPS = ['flat', 'round'];
+
+test('every profile, crest and root assembles with its own hole', async () => {
+  // The fit property, for every tooth the syntax can name: the hole cut by
+  // the same call contains the bolt, at no clearance and at plenty.
+  for (const profile of PROFILES) {
+    for (const crest of TIPS) {
+      for (const root of TIPS) {
+        const args = `d = 12, pitch = 3, h = 9, profile = "${profile}", crest = "${crest}", root = "${root}"`;
+        for (const clearance of [0, 0.4]) {
+          const left = await volume(`$fn = 32;\ndifference() {
+            thread(${args});
+            thread(${args}, internal = true, clearance = ${clearance});
+          }`);
+          assert.ok(left < 1e-6, `${args}, clearance ${clearance}: ${left} of the bolt sticks out`);
+        }
+      }
+    }
+  }
+});
+
+test('a thread written before profiles existed is the same solid', async () => {
+  // Spelling out the defaults takes the original construction, so a model
+  // that names none of the new arguments cannot have moved.
+  for (const extra of ['', ', internal = true', ', angle = 29', ', chamfer = false']) {
+    const plain = await measure(`${M8}thread(d = d, pitch = p, h = h${extra});`);
+    const spelled = await measure(
+      `${M8}thread(d = d, pitch = p, h = h${extra}, profile = "iso", crest = "flat", root = "flat");`,
+    );
+    assert.equal(spelled.volume, plain.volume, `volume moved for ${extra}`);
+    assert.equal(spelled.area, plain.area, `area moved for ${extra}`);
+  }
+});
+
+test('positional arguments land where they always did', async () => {
+  // The eighth is center, as it was before chamfer1 and chamfer2 were added.
+  const positional = await measure('$fn = 48;\nthread(8, 1.25, 10, false, 0.2, 60, true, true);');
+  const named = await measure('$fn = 48;\nthread(d = 8, pitch = 1.25, h = 10, center = true);');
+  assert.equal(positional.volume, named.volume);
+});
+
+test('the tooth shapes differ the way their names say', async () => {
+  const at = (extra) => volume(`$fn = 48;\nthread(d = 20, pitch = 4, h = 12, chamfer = false${extra});`);
+  const iso = await at('');
+  const trapezoid = await at(', profile = "trapezoid"');
+  // A broad tooth holds more material than a narrow one.
+  assert.ok(trapezoid > iso, `trapezoid ${trapezoid} should outweigh iso ${iso}`);
+  // Rounding the crest takes material off; rounding the root adds it back.
+  assert.ok((await at(', profile = "trapezoid", crest = "round", root = "flat"')) < trapezoid);
+  assert.ok((await at(', profile = "trapezoid", root = "round"')) > trapezoid);
+  // root follows crest unless it says otherwise.
+  assert.equal(
+    await at(', profile = "trapezoid", crest = "round"'),
+    await at(', profile = "trapezoid", crest = "round", root = "round"'),
+  );
+  // A deeper tooth bites further into the core.
+  assert.ok((await at(', profile = "trapezoid", depth = 2.5')) < trapezoid);
+});
+
+test('a square tooth warns about the overhang, and nothing else does', async () => {
+  const square = await render('thread(d = 20, pitch = 4, h = 8, profile = "square");');
+  assert.deepEqual(square.errors, []);
+  assert.ok(square.warnings.some((w) => w.includes('overhang')), square.warnings.join('; '));
+  for (const profile of ['iso', 'trapezoid']) {
+    const { warnings } = await render(`thread(d = 20, pitch = 4, h = 8, profile = "${profile}");`);
+    assert.deepEqual(warnings, [], profile);
+  }
+});
+
+test('a tooth the numbers cannot make is an error, and a bad name a warning', async () => {
+  const cases = [
+    ['thread(d = 8, pitch = 1.25, h = 5, profile = "trapezoid", depth = 3);', 'no room between the flanks'],
+    ['thread(d = 8, pitch = 1.25, h = 5, profile = "trapezoid", crest = "round", depth = 0.2);', 'too shallow'],
+    ['thread(d = 8, pitch = 1.25, h = 5, profile = "trapezoid", depth = 0);', 'depth must be greater than 0'],
+    ['thread(d = 8, pitch = 1.25, h = 5, crest = "round", angle = 0);', 'has no depth'],
+    ['thread(d = 8, pitch = 1, h = 5, profile = "square", internal = true, clearance = 1);', 'groove closes up'],
+  ];
+  for (const [source, message] of cases) {
+    const { errors } = await render(source);
+    assert.ok(errors.some((e) => e.includes(message)), `${source}\n  got ${errors.join('; ')}`);
+  }
+  const typo = await render('thread(d = 8, pitch = 1.25, h = 5, profile = "acme");');
+  assert.deepEqual(typo.errors, []);
+  assert.ok(typo.warnings.some((w) => w.includes('profile must be one of')));
 });
 
 test('center puts the thread on the origin, as cylinder does', async () => {
