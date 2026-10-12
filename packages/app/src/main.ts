@@ -347,7 +347,13 @@ class App {
     );
 
     this.consolePanel = new ConsolePanel(
-      (line, column) => {
+      (line, column, file) => {
+        // A line in an included file belongs to that file's tab, not this one.
+        if (file && file !== 'main.scad' && file !== '<input>') {
+          const other = this.workspace.documents.find((d) => d.name === file);
+          if (!other) return;
+          if (other.id !== this.workspace.active?.id) this.selectDocument(other.id);
+        }
         // Jumping to a line in a hidden editor would go nowhere visible.
         const { visible, maximized } = this.panels.state;
         if (!visible.editor || (maximized !== null && maximized !== 'editor')) this.setPanelVisible('editor', true);

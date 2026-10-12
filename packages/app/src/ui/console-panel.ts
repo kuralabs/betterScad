@@ -48,7 +48,7 @@ export class ConsolePanel {
   private filter: Filter = 'all';
 
   constructor(
-    private readonly onJump: (line: number, column: number) => void,
+    private readonly onJump: (line: number, column: number, file?: string) => void,
     /** Opens the downgrade preview, from the Info tab's link. */
     private readonly onPreviewDowngrade: () => void,
     /** Picks a file for the project under the name a script asked for. */
@@ -295,11 +295,11 @@ export class ConsolePanel {
             ? {
                 role: 'button',
                 tabindex: '0',
-                onclick: () => this.onJump(entry.line!, entry.column ?? 1),
+                onclick: () => this.onJump(entry.line!, entry.column ?? 1, entry.file),
                 onkeydown: ((event: KeyboardEvent) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    this.onJump(entry.line!, entry.column ?? 1);
+                    this.onJump(entry.line!, entry.column ?? 1, entry.file);
                   }
                 }) as EventListener,
               }

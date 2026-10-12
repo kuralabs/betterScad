@@ -342,8 +342,9 @@ export class ScadEditor {
     for (const d of diagnostics) {
       if (d.severity === 'echo' || d.severity === 'info') continue;
       if (!d.span) continue;
-      // Includes report spans in other files; those cannot be shown inline here.
-      if (d.span.file !== 'main.scad' && d.span.file !== '<input>' && mapped.length > 0) continue;
+      // Includes report spans in other files; their offsets mean nothing in this
+      // document, so they appear in the console only.
+      if (d.span.file !== 'main.scad' && d.span.file !== '<input>') continue;
 
       const from = Math.max(0, Math.min(d.span.start.offset, doc.length));
       const to = Math.max(from, Math.min(d.span.end.offset, doc.length));
