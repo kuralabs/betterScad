@@ -433,7 +433,14 @@ class Interpreter {
         }
         // `use` imports definitions only — never variables, never geometry.
         const usedScope = new Scope(scope, scope);
-        for (const s of used.body) {
+        // The library's own `include`/`use` lines are part of it: without
+        // following them, whatever it pulls in is silently absent and a missing
+        // nested file surfaces as an undefined function instead of a missing file.
+        if (this.includeStack.includes(stmt.path)) continue;
+        this.includeStack.push(stmt.path);
+        const body = this.spliceIncludes(used.body, usedScope, used.file);
+        this.includeStack.pop();
+        for (const s of body) {
           if (s.kind === 'module-decl') scope.modules.set(s.name, { decl: s, scope: usedScope });
           else if (s.kind === 'function-decl') {
             scope.functions.set(s.name, { name: s.name, params: s.params, body: s.body, scope: usedScope });

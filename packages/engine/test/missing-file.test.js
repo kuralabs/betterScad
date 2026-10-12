@@ -33,3 +33,21 @@ test('use <> and include <> name the library they could not find', async () => {
   assert.deepEqual(await missing('use <MCAD/gears.scad>'), ['MCAD/gears.scad']);
   assert.deepEqual(await missing('include <box.scad>'), ['box.scad']);
 });
+
+test('a library\'s own include is followed, and its absence is a missing file', async () => {
+  const files = { 'lib.scad': 'include <helpers.scad>\nfunction twice(x) = helper(x) * 2;' };
+  const run = (extra) =>
+    engine.render('use <lib.scad>\necho(twice(3));', {
+      file: 'main.scad',
+      preview: false,
+      resolveInclude: async (p) => ({ ...files, ...extra })[p],
+      assets: { read: async () => undefined },
+    });
+
+  const absent = await run({});
+  assert.deepEqual(absent.diagnostics.filter((d) => d.missingFile).map((d) => d.missingFile), ['helpers.scad']);
+
+  const present = await run({ 'helpers.scad': 'function helper(x) = x + 1;' });
+  assert.equal(present.diagnostics.filter((d) => d.severity === 'error').length, 0);
+  assert.ok(present.diagnostics.some((d) => d.severity === 'echo' && /8/.test(d.message)));
+});
