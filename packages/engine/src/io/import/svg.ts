@@ -14,7 +14,7 @@ import type { Contour2, Point2 } from './dxf.js';
 
 export interface SvgImportResult {
   contours: Contour2[];
-  /** Document size in user units, used for the Y flip and for `center=`. */
+  /** Document size in millimetres. */
   width: number;
   height: number;
   issues: { message: string }[];
@@ -46,8 +46,13 @@ function scanElements(text: string): Element[] {
   return elements;
 }
 
-/** Converts an SVG length (`10`, `10px`, `2cm`, `50%`) to user units. */
-function toUserUnits(raw: string | undefined, fallback: number, dpi: number): number {
+/**
+ * Converts an SVG length (`10`, `10px`, `2cm`) to millimetres, or `fallback`.
+ *
+ * A bare number or `px` is a pixel, which is 1/`dpi` inch: that is how OpenSCAD
+ * reads them, and why `dpi` exists at all. Percentages carry no size of their own.
+ */
+function toMillimetres(raw: string | undefined, fallback: number, dpi: number): number {
   if (!raw) return fallback;
   const match = /^\s*(-?[\d.]+(?:e[+-]?\d+)?)\s*([a-z%]*)\s*$/i.exec(raw);
   if (!match) return fallback;
@@ -56,17 +61,17 @@ function toUserUnits(raw: string | undefined, fallback: number, dpi: number): nu
   switch (match[2].toLowerCase()) {
     case '':
     case 'px':
-      return value;
+      return (value * 25.4) / dpi;
     case 'pt':
-      return (value * dpi) / 72;
+      return (value * 25.4) / 72;
     case 'pc':
-      return (value * dpi) / 6;
+      return (value * 25.4) / 6;
     case 'in':
-      return value * dpi;
+      return value * 25.4;
     case 'cm':
-      return (value * dpi) / 2.54;
+      return value * 10;
     case 'mm':
-      return (value * dpi) / 25.4;
+      return value;
     default:
       return fallback;
   }
@@ -82,12 +87,28 @@ export function importSVG(
   const issues: { message: string }[] = [];
 
   const svg = elements.find((e) => e.name.toLowerCase() === 'svg');
-  let width = toUserUnits(svg?.attrs.width, 0, dpi);
-  let height = toUserUnits(svg?.attrs.height, 0, dpi);
+  const widthMm = toMillimetres(svg?.attrs.width, 0, dpi);
+  const heightMm = toMillimetres(svg?.attrs.height, 0, dpi);
   const viewBox = svg?.attrs.viewBox?.trim().split(/[\s,]+/).map(Number);
-  if (viewBox && viewBox.length === 4 && viewBox.every(Number.isFinite)) {
-    if (width === 0) width = viewBox[2];
-    if (height === 0) height = viewBox[3];
+  const hasViewBox = !!viewBox && viewBox.length === 4 && viewBox.every(Number.isFinite) && viewBox[2] > 0 && viewBox[3] > 0;
+
+  // The viewBox says how many user units the declared size spans, so the
+  // millimetres per unit is the size over the box, not the pixel size. Without
+  // either, one user unit is one pixel.
+  let mmPerUnit = 25.4 / dpi;
+  if (hasViewBox) {
+    if (widthMm > 0) mmPerUnit = widthMm / viewBox![2];
+    else if (heightMm > 0) mmPerUnit = heightMm / viewBox![3];
+  }
+
+  let boxX = 0;
+  let width = widthMm / mmPerUnit;
+  let height = heightMm / mmPerUnit;
+  if (hasViewBox) {
+    boxX = viewBox![0];
+    if (width === 0) width = viewBox![2];
+    // The flip runs about the box's bottom edge, which need not be the declared height.
+    height = viewBox![1] + viewBox![3];
   }
 
   const contours: Contour2[] = [];
@@ -151,10 +172,13 @@ export function importSVG(
   }
 
   for (const contour of contours) {
-    for (const point of contour) point[1] = height - point[1];
+    for (const point of contour) {
+      point[0] = (point[0] - boxX) * mmPerUnit;
+      point[1] = (height - point[1]) * mmPerUnit;
+    }
   }
 
-  return { contours, width, height, issues };
+  return { contours, width: width * mmPerUnit, height: height * mmPerUnit, issues };
 }
 
 function ellipse(cx: number, cy: number, rx: number, ry: number, steps: number): Contour2 {
